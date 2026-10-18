@@ -279,12 +279,17 @@ class DownloadManager(QObject):
             audio_url: str = "", quality: str = "",
             audio_map: dict = None, url_backups: dict = None,
             audio_backups: dict = None,
-            cover_url: str = "") -> DownloadTaskInfo:
+            cover_url: str = "",
+            convert_to_gif: bool = False,
+            gif_path: str = "") -> DownloadTaskInfo:
         save_path = self._unique_path(save_path)
+        gif_path = self._unique_path(gif_path) if gif_path else ""
         info = DownloadTaskInfo(task_id=uuid.uuid4().hex[:12], url=url,
                                 save_path=save_path, name=name,
                                 quality=quality or "",
-                                cover_url=cover_url or "")
+                                cover_url=cover_url or "",
+                                convert_to_gif=bool(convert_to_gif),
+                                gif_path=gif_path)
         plan = self._build_plan(url, fallbacks, audio_url, audio_map,
                                 url_backups, audio_backups)
         with self._lock:
@@ -352,7 +357,7 @@ class DownloadManager(QObject):
             # 「合并中」的 DASH 任务此刻还没写出成品，但最终目标就是 save_path，
             # ffmpeg 会直接往那儿写；漏掉它会让同一秒的第二次下载复用同一路径。
             return any(t.save_path == save_path
-                       and t.status in ("等待中", "下载中", "合并中")
+                       and t.status in ("等待中", "下载中", "合并中", "转换中")
                        for t in self._tasks.values())
 
     def cancel(self, task_id: str):
@@ -446,6 +451,9 @@ class DownloadManager(QObject):
         # 锁外重挂路径：_unique_path/_path_in_use 需要拿锁
         for t, new_path in (pending if rebase_to else []):
             t.save_path = self._unique_path(new_path)
+            if t.convert_to_gif and t.gif_path:
+                t.gif_path = self._unique_path(os.path.join(
+                    os.path.dirname(t.save_path), os.path.basename(t.gif_path)))
         pending = retried
         for t in pending:
             self.task_progress.emit(t)
@@ -457,7 +465,7 @@ class DownloadManager(QObject):
         """批量取消；tasks 为空时取消所有未结束任务。返回实际取消的任务数"""
         with self._lock:
             pool = tasks if tasks is not None else list(self._tasks.values())
-            targets = [t for t in pool if t.status in ("等待中", "下载中")]
+            targets = [t for t in pool if t.status in ("等待中", "下载中", "转换中")]
             ids = [t.task_id for t in targets]
         for tid in ids:
             self.cancel(tid)
@@ -568,6 +576,9 @@ class DownloadManager(QObject):
         elif last_err:
             info.status = "失败"
             info.error = last_err
+        elif info.convert_to_gif and info.status == "已完成":
+            # 抖音图文动图：视频轨下载完成后立刻转 GIF，任务最终产物是 .gif
+            self._convert_task_gif(info, cancel)
         # 只要任务没有真正成功，就清掉可能残留的临时文件，
         # 避免用户下载目录里堆 .part / .meta
         if info.status != "已完成":
@@ -582,6 +593,53 @@ class DownloadManager(QObject):
                  info.downloaded, info.total, info.error or "-")
         self.task_finished.emit(info)
         self._pump()
+
+    # ------------------------------------------------------------------ #
+    # 动图转 GIF
+    def _convert_task_gif(self, info, cancel):
+        """把已下载的动图视频轨转成 GIF；失败保留 MP4 供用户手动处理"""
+        from .mp4_to_gif import ConversionCancelled, ConversionError, convert
+
+        source = info.save_path
+        target = info.gif_path or (os.path.splitext(source)[0] + ".gif")
+        info.status = "转换中"
+        info.error = ""
+        self.task_progress.emit(info)
+        log.info("开始转 GIF %s | %s -> %s", info.task_id, source, target)
+        try:
+            convert(source, target, cancel=cancel)
+        except ConversionCancelled:
+            info.status = "已取消"
+            info.error = ""
+            self.task_progress.emit(info)
+            log.info("已取消转 GIF %s，保留视频 %s", info.task_id, source)
+            return
+        except ConversionError as exc:
+            info.status = "失败"
+            info.error = f"GIF 转换失败：{exc}"[:300]
+            self.task_progress.emit(info)
+            log.error("转 GIF 失败 %s：%s", info.task_id, exc)
+            return
+        except Exception as exc:  # noqa: BLE001 - 转码异常统一落到任务失败
+            info.status = "失败"
+            info.error = f"GIF 转换失败：{exc}"[:300]
+            self.task_progress.emit(info)
+            log.exception("转 GIF 异常 %s", info.task_id)
+            return
+        # 转换成功后删除临时视频，任务路径与名称都指向 GIF
+        try:
+            os.remove(source)
+        except OSError as exc:
+            log.warning("GIF 已生成但删除临时视频失败 %s：%s", source, exc)
+        info.save_path = target
+        try:
+            size = os.path.getsize(target)
+            info.downloaded = info.total = size
+        except OSError:
+            pass
+        info.status = "已完成"
+        self.task_progress.emit(info)
+        log.info("转 GIF 完成 %s | %s（%s 字节）", info.task_id, target, info.total)
 
     # ------------------------------------------------------------------ #
     # 卡住检测

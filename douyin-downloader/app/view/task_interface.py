@@ -73,7 +73,7 @@ _LOG_COLORS = {
 # 筛选分段：索引与状态集合对应（0 = 全部）
 _FILTERS = [
     ("全部", None),
-    ("进行中", ("下载中", "等待中", "合并中")),
+    ("进行中", ("下载中", "等待中", "合并中", "转换中")),
     ("已完成", ("已完成",)),
     ("失败", ("失败", "已取消")),
 ]
@@ -574,7 +574,7 @@ class TaskInterface(ScrollArea):
             QTimer.singleShot(0, self._prune_rows)
             self._toast("任务已不存在", "这条任务记录已经被清除了", "warning")
             return
-        if info.status in ("下载中", "等待中", "合并中"):
+        if info.status in ("下载中", "等待中", "合并中", "转换中"):
             self._toast("无法删除", "任务正在进行，请先取消任务再删除文件", "warning")
             return
 

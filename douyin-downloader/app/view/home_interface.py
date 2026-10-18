@@ -320,6 +320,7 @@ class HomeInterface(ScrollArea):
     def _on_parse_ok(self, info: VideoInfo):
         self._empty_result_retries = 0
         self._current = info
+        live_count = sum(1 for g in info.image_live_url_groups if g)
         self.coverLabel.reset()
         self.titleLabel.setText(info.title or "（无标题）")
         self.authorLabel.setText(f"@{info.author}" if info.author else "未知作者")
@@ -333,7 +334,10 @@ class HomeInterface(ScrollArea):
             self.durationChip.setText(f"{pages} 页" if pages else "整本")
             self.durationChip.setVisible(True)
         else:
-            self.durationChip.setText(f"{len(info.image_urls)} 张")
+            chip = f"{len(info.image_urls)} 张"
+            if live_count:
+                chip += f" · {live_count} 个动图"
+            self.durationChip.setText(chip)
             self.durationChip.setVisible(True)
 
         # 元信息行：类型已由徽章表达，这里只留"选了会得到什么"（画质 / 张数 / 章节 / BGM）
@@ -351,6 +355,8 @@ class HomeInterface(ScrollArea):
                 parts.append(f"{pages} 页")
         else:
             parts.append(f"{len(info.image_urls)} 张图片")
+            if live_count:
+                parts.append(f"{live_count} 个动图转 GIF")
         if info.music_title:
             parts.append(f"BGM {info.music_title}")
         self.metaLabel.setText(" · ".join(parts))
@@ -366,7 +372,10 @@ class HomeInterface(ScrollArea):
             self.downloadBtn.setText("下载本子")
             self.downloadBtn.setIcon(FIF.PHOTO)
         else:
-            self.downloadBtn.setText("下载全部图片" if info.is_image else "下载视频")
+            if info.is_image and live_count:
+                self.downloadBtn.setText("下载图集（动图转 GIF）")
+            else:
+                self.downloadBtn.setText("下载全部图片" if info.is_image else "下载视频")
             self.downloadBtn.setIcon(FIF.PHOTO if info.is_image else FIF.DOWNLOAD)
         self.copyLinkBtn.setVisible(not info.is_image)
         self.coverBtn.setVisible(bool(info.cover_url) and not info.is_image)
@@ -538,13 +547,30 @@ class HomeInterface(ScrollArea):
                         if needs_cookie_for_source(info.source) else "")
         if info.is_image:
             folder = os.path.join(base, fname)
+            live_groups = info.image_live_url_groups
+            live_count = 0
             for i, url in enumerate(info.image_urls, 1):
-                ext = ".webp" if "webp" in url else ".jpeg"
-                path = os.path.join(folder, f"{i:02d}{ext}")
-                self.ctx.manager.add(url, path,
-                                     f"{info.safe_title(30)}_{i:02d}{ext}",
-                                     cookies=task_cookies)
-            self._toast("已加入队列", f"图集共 {len(info.image_urls)} 张图片，开始下载", "success")
+                group = live_groups[i - 1] if i - 1 < len(live_groups) else []
+                if group:
+                    # 动图：先下载视频轨（临时 .mp4），完成瞬间转成同名 GIF
+                    live_count += 1
+                    mp4_path = os.path.join(folder, f"{i:02d}_live.mp4")
+                    gif_path = os.path.join(folder, f"{i:02d}.gif")
+                    self.ctx.manager.add(
+                        group[0], mp4_path,
+                        f"{info.safe_title(30)}_{i:02d}.gif",
+                        fallbacks=group[1:], cookies=task_cookies,
+                        convert_to_gif=True, gif_path=gif_path)
+                else:
+                    ext = ".webp" if "webp" in url else ".jpeg"
+                    path = os.path.join(folder, f"{i:02d}{ext}")
+                    self.ctx.manager.add(url, path,
+                                         f"{info.safe_title(30)}_{i:02d}{ext}",
+                                         cookies=task_cookies)
+            msg = f"图集共 {len(info.image_urls)} 张图片"
+            if live_count:
+                msg += f"，其中 {live_count} 个动图将转为 GIF"
+            self._toast("已加入队列", msg + "，开始下载", "success")
         else:
             # 取用户选择的清晰度（默认最高档）
             options = info.quality_options
