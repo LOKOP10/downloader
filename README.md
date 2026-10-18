@@ -35,6 +35,9 @@
 │   │   │   ├── site_ctx.py     # 站点上下文（Cookie / profile 目录 / 选项）
 │   │   │   ├── models.py       # 数据模型（VideoInfo 等）
 │   │   │   ├── manga.py        # 本地漫画书架、自然排序、阅读进度与书架迁移
+│   │   │   ├── video_library.py # 本地视频库：扫描、封面、续播进度与持久化
+│   │   │   ├── webp_converter.py # WebP 转 MP4 引擎
+│   │   │   ├── mp4_to_gif.py   # MP4 转 GIF 引擎（两遍调色板）
 │   │   │   ├── config.py       # 配置读写（DEFAULT_CONFIG 是默认值唯一来源）
 │   │   │   ├── workers.py      # 后台线程（登录、预览、封面）
 │   │   │   ├── proxy.py        # 系统代理读取
@@ -45,7 +48,7 @@
 │   │   ├── view/               # 界面（qfluentwidgets）
 │   │   │   ├── design.py       # 设计 token：颜色 / 间距 / 字阶 / 动效
 │   │   │   ├── workspace.py    # 壳层组件：侧栏导航、面板、状态条、设置行、分段控件
-│   │   │   └── *_interface.py  # 六个页面（解析 / 批量 / 任务 / 书架 / 转换 / 设置）
+│   │   │   └── *_interface.py  # 八个页面：解析 / 批量 / 任务 / 漫画 / 本地视频 / WebP / GIF / 设置
 │   │   └── main_window.py      # 窗口壳层：标题栏 + 侧栏 + 内容画布 + 状态条
 │   ├── assets/                 # 图标资源
 │   ├── installer/              # Inno Setup 安装包脚本
@@ -94,11 +97,17 @@ python main.py
 
 ### 打包成 exe
 
-```bash
-pyinstaller build_exe.spec
+发布构建按版本目录输出，安装包脚本从 `setup.iss` 读取版本号：
+
+```powershell
+pyinstaller --noconfirm --distpath dist/<version> build_exe.spec
+powershell -ExecutionPolicy Bypass -File installer/build_setup.ps1
 ```
 
-产物在 `dist/` 下。安装包用 `installer/setup.iss` 配合 Inno Setup 编译。
+产物为 `dist/<version>/视频下载器.exe` 与 `dist/视频下载器-<version>-setup.exe`。
+版本号唯一来源是 `app_version.txt`，升级时同步 `installer/setup.iss` 的
+`MyAppVersion` 与 `installer/README.txt`。只做本机测试时也可直接
+`pyinstaller build_exe.spec`，产物在 `dist/` 下。
 
 若单文件 EXE 提示 `Could not create temporary directory!`，说明启动解包所需的系统临时目录不可用。可构建不依赖启动时临时解包的文件夹版（PowerShell）：
 
@@ -108,6 +117,16 @@ python -m PyInstaller --noconfirm --distpath dist/portable-build build_exe.spec
 ```
 
 文件夹版的 EXE 必须与 `_internal/` 一起保留，不能只复制 EXE。程序运行期临时文件使用自身目录的 `.runtime-temp/`，只改变本进程及其子进程环境，不修改Windows用户环境变量。
+
+### 测试
+
+```bash
+cd douyin-downloader
+python -m pytest tests -q
+```
+
+当前全量 206 项（含 32 项子测试）。MP4 转 GIF / WebP 转换测试会调用本机
+ffmpeg；打包目录可把 `dist/tools` 加入 PATH。
 
 ### 使用
 
@@ -120,9 +139,19 @@ python -m PyInstaller --noconfirm --distpath dist/portable-build build_exe.spec
 4. B 站 DASH 合并需要 ffmpeg，在「设置 → 合并组件（ffmpeg）」里下载，不是 pip 依赖。
 5. 解析失败或下载卡住，看 `logs/app.log`。
 
-### WebP 转 MP4（Windows，功能分支）
+### 本地视频（Windows）
 
-本功能在独立分支 `feature/webp-mp4-integration` 开发，不合并到 main。
+- 下载完成的视频自动入库，只收真正的视频文件，同名封面图不会误入库；也可用
+  「导入文件夹」递归导入或直接拖入。
+- 卡片墙显示封面（优先用下载封面，没有就截首帧）、标题与时长；支持搜索、
+  按最近播放或名称排序。
+- 记住每个视频的播放位置，下次点击封面从上次位置继续；播放器支持 0.5×–2.0×
+  倍速、F11 全屏、进度拖动与键盘快捷键。
+- 播放进度保存在程序目录 `video_library.json`（原子写 + 备份），源视频不被修改；
+  文件移动后记录保留，重新导入即可找回。
+- 复用系统解码器；无法播放的格式会明确报错，不会从书架静默消失。
+
+### WebP 转 MP4（Windows）
 
 - 下载器内新增原生「WebP 转 MP4」页面，不启动HTTP服务器、不上传文件。
 - 支持多选/拖放、列表排序、批量独立转换及按列表顺序合并为一个MP4。
@@ -160,7 +189,7 @@ python -m unittest discover -s tests -p "test_gif_interface.py" -v
 
 ### 漫画阅读器（Windows）
 
-顶部「漫画阅读器」提供本地漫画书架，不需要另外安装阅读器或 .NET 运行环境。
+左侧导航「漫画阅读器」提供本地漫画书架，不需要另外安装阅读器或 .NET 运行环境。
 
 - **添加漫画**：选择一本漫画的文件夹，每张 `.jpg` / `.jpeg` 是一页（支持大写扩展名与章节子目录）。
 - **导入漫画库**：选择总目录，每个子文件夹作为一本漫画。可将一本或多本的文件夹直接拖进书架。
