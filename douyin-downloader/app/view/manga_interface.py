@@ -13,6 +13,7 @@ from qfluentwidgets.common.style_sheet import isDarkTheme
 
 from ..core.manga import MangaLibrary, discover_books, folder_key, is_page, natural_key, scan_pages
 from . import design as D
+from . import workspace as W
 from .manga_reader import LocalJobs, MangaReader, read_image
 
 
@@ -91,39 +92,51 @@ class MangaInterface(QWidget):
         self._covers = {}
         self._cover_pending = set()
         self._cover_generation = 0
-        layout = D.page_layout(self)
+        layout = W.page_body(self, pad=24, spacing=12)
         header = QHBoxLayout()
-        header.addWidget(D.PageHeader("漫画阅读器", "一夹一本 · JPG / JPEG · 自然排序 · 自动保存阅读进度", self), 1)
-        self.addBtn = PrimaryPushButton(FIF.ADD, "添加漫画", self)
-        self.addBtn.clicked.connect(self._choose_book)
-        header.addWidget(self.addBtn)
+        header.setSpacing(D.GAP_SM)
+        self.heading = W.PageHeading(
+            "漫画阅读器",
+            "一个文件夹一本 · 支持章节子目录 · 自然排序 · 阅读进度自动保存",
+            self)
+        header.addWidget(self.heading, 1)
+        self.refreshBtn = PushButton(FIF.SYNC, "刷新", self)
+        self.refreshBtn.setToolTip("重新扫描书架里的漫画页面（新增 / 删除图片后使用）")
+        self.refreshBtn.clicked.connect(self.refresh_files)
+        self.moreBtn = PushButton(FIF.MORE, "更多", self)
+        self.moreBtn.setToolTip("导入独立页间阅读器书架、重新加载等")
+        self.moreBtn.clicked.connect(self._more_menu)
         self.libraryBtn = PushButton(FIF.FOLDER, "导入漫画库", self)
+        self.libraryBtn.setToolTip("选择总目录，每个子文件夹作为一本漫画")
         self.libraryBtn.clicked.connect(self._choose_library)
-        header.addWidget(self.libraryBtn)
+        self.addBtn = PrimaryPushButton(FIF.ADD, "添加漫画", self)
+        self.addBtn.setToolTip("选择一本漫画的文件夹（每张 JPG / JPEG 是一页）")
+        self.addBtn.clicked.connect(self._choose_book)
+        for btn in (self.refreshBtn, self.moreBtn, self.libraryBtn, self.addBtn):
+            header.addWidget(btn, 0, Qt.AlignmentFlag.AlignBottom)
         layout.addLayout(header)
+
+        # 搜索 / 筛选 / 排序与书架同属一块面板：工具与内容是一体的，
+        # 拆成两处会让人以为筛选只作用于"下面的另一块东西"
+        panel = W.Panel(self, padding=(16, 10, 16, 12), spacing=10)
         tools = QHBoxLayout()
-        self.search = SearchLineEdit(self)
+        tools.setSpacing(D.GAP_SM)
+        self.search = SearchLineEdit(panel)
         self.search.setPlaceholderText("搜索漫画名称")
-        self.search.setMaximumWidth(340)
+        self.search.setMinimumWidth(200)
         self.search.textChanged.connect(self.refresh_shelf)
         tools.addWidget(self.search, 1)
-        self.filter = ComboBox(self)
+        self.filter = ComboBox(panel)
         self.filter.addItems(["全部漫画", "最近阅读", "我的收藏"])
+        self.filter.setMinimumWidth(120)
         self.filter.currentIndexChanged.connect(self.refresh_shelf)
         tools.addWidget(self.filter)
-        self.sort = ComboBox(self)
+        self.sort = ComboBox(panel)
         self.sort.addItems(["最近阅读", "名称顺序", "阅读进度"])
+        self.sort.setMinimumWidth(120)
         self.sort.currentIndexChanged.connect(self.refresh_shelf)
         tools.addWidget(self.sort)
-        tools.addStretch(1)
-        self.refreshBtn = PushButton(FIF.SYNC, "刷新", self)
-        self.refreshBtn.clicked.connect(self.refresh_files)
-        tools.addWidget(self.refreshBtn)
-        more = PushButton("更多", self)
-        more.clicked.connect(self._more_menu)
-        tools.addWidget(more)
-        self.moreBtn = more
-        layout.addLayout(tools)
+        panel.body.addLayout(tools)
         self.shelf = QListWidget(self)
         self.shelf.setViewMode(QListView.ViewMode.IconMode)
         self.shelf.setResizeMode(QListView.ResizeMode.Adjust)
@@ -141,16 +154,17 @@ class MangaInterface(QWidget):
         self.shelf.customContextMenuRequested.connect(self._context_menu)
         D.theme_qss(self.shelf, "QListWidget{background:transparent;border:0;}",
                     "QListWidget{background:transparent;border:0;}")
-        layout.addWidget(self.shelf, 1)
+        panel.body.addWidget(self.shelf, 1)
         self.empty = D.caption("", self)
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty.setWordWrap(True)
         self.empty.setMinimumHeight(180)
-        layout.addWidget(self.empty, 1)
+        panel.body.addWidget(self.empty, 1)
         self.status = D.hint_label("本地阅读 · 原图片不变 · 右键封面可收藏或移除记录", self)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+        panel.body.addWidget(self.status)
+        layout.addWidget(panel, 1)
         self.refresh_shelf()
         if self.library.warning:
             self.status.setText(self.library.warning)

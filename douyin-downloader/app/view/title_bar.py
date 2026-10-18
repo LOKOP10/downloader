@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """标题栏：32px 紧凑自绘标题栏
 
-- 高 **32px**（Tailwind `h-8`），底色用面板级（`BG_SECONDARY`）+ 底部 1px 分隔线
-- 左侧：16px 窗口图标 + 12px 次级色标题，都靠左；图标前留 10px
-- 右侧：三个 **48px 宽**（`w-12`）全高按钮；普通按钮 hover 用 `BG_HOVER`，
-  **关闭键 hover 变红底白字**（Tailwind red-500）
+- 高 **32px**，底色用页底色（与内容画布一致）+ 底部 1px 分隔线
+- 左侧：16px 窗口图标 + 12px 次级色标题，图标前留 12px
+- 右侧：三个 **46px 宽** 全高按钮；普通按钮 hover 用 BG_HOVER，
+  **关闭键 hover 变红底白字**
 
 窗口拖动、双击最大化、按钮到窗口操作的连线都由 `TitleBarBase` 提供，
-这里只换外观。
+这里只换外观。标题栏横跨整窗（侧栏从标题栏下方开始），拖动热区因此更大。
 """
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QIcon, QPainter
@@ -36,7 +36,7 @@ class AppTitleBar(TitleBar):
         # ---------------- 左侧：图标 + 标题 ----------------
         self.iconLabel = QLabel(self)
         self.iconLabel.setFixedSize(16, 16)
-        self.hBoxLayout.insertSpacing(0, 10)
+        self.hBoxLayout.insertSpacing(0, 12)
         self.hBoxLayout.insertWidget(1, self.iconLabel, 0,
                                      Qt.AlignLeft | Qt.AlignVCenter)
 
@@ -77,9 +77,8 @@ class AppTitleBar(TitleBar):
         """设置三个窗口按钮的**图标色**。
 
         必做：qframelesswindow 的 `TitleBarButton` 默认把图标色初始化成
-        `QColor(0, 0, 0)`（纯黑）——暗色主题下就是黑图标配深色标题栏，
-        三个键基本看不见（2026-10-11 用户反馈）。这里统一改成文字次级色，
-        hover 时升到正文色，保持和其它控件同一套 token。
+        `QColor(0, 0, 0)`（纯黑）—— 暗色主题下就是黑图标配深色标题栏，
+        三个键基本看不见。这里统一改成文字次级色，hover 时升到正文色。
         """
         normal = _color(D.TEXT_SECONDARY)
         strong = _color(D.TEXT_PRIMARY)
@@ -108,7 +107,7 @@ class AppTitleBar(TitleBar):
         """自绘底色与底部分隔线 —— 走 paintEvent 而不是 QSS，
         省掉 WA_StyledBackground 那套开关，主题切换后重绘即生效。"""
         painter = QPainter(self)
-        painter.fillRect(self.rect(), _color(D.BG_SECONDARY))
+        painter.fillRect(self.rect(), _color(D.BG_PRIMARY))
         painter.setPen(_color(D.BORDER))
         y = self.height() - 1
         painter.drawLine(0, y, self.width(), y)

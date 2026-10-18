@@ -1,22 +1,39 @@
 # -*- coding: utf-8 -*-
-"""设置页：下载、账号与登录、个性化、关于"""
+"""设置页：下载、账号与登录、个性化、关于
+
+界面重做的结构：**分组面板 + 设置行**（不再是「每项一张卡片」的卡片流 ——
+一屏 10 张同构卡片既占高度又分不出组）。
+
+    页头（设置 / 一句话说明）
+    ┌ 下载 ────────────────────────────────────────────┐
+    │ 下载目录        C:\\Users\\…\\Downloads   [选择]  │
+    │ 批量按作者分文件夹                          [开关] │
+    │ …                                                │
+    └──────────────────────────────────────────────────┘
+    ┌ 账号与登录 ──────────────────────────────────────┐
+    │ 抖音   说明文字              ● 未配置 [登录][Cookie]│
+    └──────────────────────────────────────────────────┘
+
+功能与配置键全部沿用（config.json 不新增字段）。控件宽度统一，右侧对齐，
+扫读时「名字 → 状态 → 控件」是一条竖线。
+"""
 import os
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QFileDialog, QWidget
-from qfluentwidgets import (ComboBox, FluentIcon as FIF, HyperlinkCard,
-                            InfoBar, InfoBarPosition, PushSettingCard,
-                            ScrollArea, SettingCard, SettingCardGroup,
-                            SpinBox, SwitchSettingCard, Theme, setTheme)
+from qfluentwidgets import (ComboBox, FluentIcon as FIF, InfoBar,
+                            InfoBarPosition, PushButton, ScrollArea, SpinBox,
+                            SwitchButton, Theme, setTheme)
 
 from . import design as D
-from .account_card import (AccountCard, STATE_COOKIE, STATE_LOGIN, STATE_NONE,
+from . import workspace as W
+from .account_card import (AccountRow, STATE_COOKIE, STATE_LOGIN, STATE_NONE,
                            profile_logged_in)
 from .cookie_dialog import (BILI_FIELDS, CookieDialog, DOUYIN_FIELDS,
                             INS_FIELDS, JM_FIELDS, X_FIELDS, XHS_FIELDS)
 
-# 平台账号规格：一张卡 = 一个平台。
+# 平台账号规格：一行 = 一个平台。
 # (key, 图标, 显示名, 说明, cookie 配置键, cookie 特征字段, profile 目录属性)
 #
 # 登录态有两个真实来源（浏览器持久化 profile / 手填 Cookie），两个都要认，
@@ -25,7 +42,7 @@ _PLATFORM_SPECS = [
     ("douyin", FIF.VIDEO, "抖音",
      "解析受限作品时需要登录态；与「批量下载」页共用同一份登录态",
      "cookie", "sessionid", "profile_dir"),
-    ("x", FIF.GLOBE, "X(Twitter)",
+    ("x", FIF.GLOBE, "X (Twitter)",
      "解析敏感 / 受限内容推文时需要",
      "x_cookie", "auth_token", "x_profile_dir"),
     ("instagram", FIF.CAMERA, "Instagram",
@@ -71,13 +88,16 @@ _LOGIN_GAIN = {
 
 _NAME_OF = {spec[0]: spec[2] for spec in _PLATFORM_SPECS}
 
+# 右侧控件统一宽度：设置行的"控件边界"对齐后才能竖着扫读
+_CTRL_W = 132
+
 
 class SettingInterface(ScrollArea):
     def __init__(self, ctx, parent=None):
         super().__init__(parent)
         self.ctx = ctx
         self._workers = []
-        self.accountCards = {}      # platform key -> (card, cfg_key, token, profile_attr)
+        self.accountCards = {}      # platform key -> (row, cfg_key, token, profile_attr)
         self.setObjectName("settingInterface")
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -85,10 +105,12 @@ class SettingInterface(ScrollArea):
         self.view = QWidget(self)
         self.view.setObjectName("settingView")
         self.setWidget(self.view)
-        self.vBox = D.page_layout(self.view)
+        self.vBox = W.page_body(self.view, pad=24, spacing=14)
 
-        self.vBox.addWidget(D.PageHeader("设置", "下载行为、平台登录态与界面外观",
-                                        self.view))
+        self.vBox.addWidget(W.PageHeading(
+            "设置",
+            "下载行为、平台登录态与界面外观，全部即时生效，不需要重启。",
+            self.view))
         self._build_download_group()
         self._build_account_group()
         self._build_personal_group()
@@ -97,49 +119,75 @@ class SettingInterface(ScrollArea):
         self.view.setStyleSheet("QWidget#settingView { background: transparent; }")
 
     # ------------------------------------------------------------------ #
+    def _group(self, title: str, meta: str = "") -> W.Panel:
+        """分组面板：标题行 + 一组设置行（行与行之间只有一条分隔线）"""
+        panel = W.Panel(self.view, padding=(16, 10, 16, 6), spacing=0)
+        head = W.PanelTitle(title, panel, note=meta)
+        panel.body.addWidget(head)
+        panel.body.addSpacing(4)
+        self.vBox.addWidget(panel)
+        return panel
+
+    def _row(self, panel: W.Panel, title: str, desc: str, control=None,
+             icon=None) -> W.SettingRow:
+        row = W.SettingRow(title, desc, panel, control=control, icon=icon)
+        panel.body.addWidget(row)
+        return row
+
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _switch(panel):
+        """开关：关掉内置的 On/Off 文字。
+
+        开关自身的颜色已经说明状态，旁边再写一遍「On」是重复信息，还会把
+        右侧控件边界撑出去（与「名字 → 状态 → 控件」那一条竖线打架）。
+        """
+        sw = SwitchButton(panel)
+        sw.setOnText("")
+        sw.setOffText("")
+        return sw
+
     def _build_download_group(self):
         cfg = self.ctx.config
-        group = SettingCardGroup("下载", self.view)
+        panel = self._group("下载", "保存位置、命名与并发")
 
-        self.folderCard = PushSettingCard(
-            "选择文件夹", FIF.DOWNLOAD, "下载目录",
-            cfg.get("download_path"), group)
-        self.folderCard.clicked.connect(self._on_choose_folder)
-        group.addSettingCard(self.folderCard)
+        self.folderBtn = PushButton("选择文件夹", panel)
+        self.folderBtn.clicked.connect(self._on_choose_folder)
+        self.folderRow = self._row(
+            panel, "下载目录", cfg.get("download_path"),
+            control=self.folderBtn, icon=FIF.DOWNLOAD)
 
-        self.authorFolderCard = SwitchSettingCard(
-            FIF.FOLDER_ADD, "批量下载按作者分文件夹",
-            "仅批量下载时生效：作品保存到以作者昵称命名的子文件夹中；单个下载始终直接存到下载目录",
-            parent=group)
-        self.authorFolderCard.setChecked(bool(cfg.get("create_author_folder")))
-        self.authorFolderCard.checkedChanged.connect(
+        self.authorFolderSwitch = self._switch(panel)
+        self.authorFolderSwitch.setChecked(bool(cfg.get("create_author_folder")))
+        self.authorFolderSwitch.checkedChanged.connect(
             lambda v: cfg.set("create_author_folder", v))
-        group.addSettingCard(self.authorFolderCard)
+        self._row(
+            panel, "批量下载按作者分文件夹",
+            "仅批量下载时生效：作品存到以作者昵称命名的子文件夹；单个下载始终直接存到下载目录",
+            control=self.authorFolderSwitch, icon=FIF.FOLDER_ADD)
 
-        self.coverCard = SwitchSettingCard(
-            FIF.PHOTO, "同时下载封面",
-            "下载视频时附带保存封面图片", parent=group)
-        self.coverCard.setChecked(bool(cfg.get("download_cover")))
-        self.coverCard.checkedChanged.connect(lambda v: cfg.set("download_cover", v))
-        group.addSettingCard(self.coverCard)
+        self.coverSwitch = self._switch(panel)
+        self.coverSwitch.setChecked(bool(cfg.get("download_cover")))
+        self.coverSwitch.checkedChanged.connect(lambda v: cfg.set("download_cover", v))
+        self._row(panel, "同时下载封面", "下载视频时附带保存封面图片",
+                  control=self.coverSwitch, icon=FIF.PHOTO)
 
-        self.copyCard = SwitchSettingCard(
-            FIF.COPY, "下载完成后自动复制文件",
-            "单个视频下载完成后自动复制到剪贴板，可直接 Ctrl+V 或右键粘贴", parent=group)
-        self.copyCard.setChecked(bool(cfg.get("auto_copy_file")))
-        self.copyCard.checkedChanged.connect(lambda v: cfg.set("auto_copy_file", v))
-        group.addSettingCard(self.copyCard)
+        self.copySwitch = self._switch(panel)
+        self.copySwitch.setChecked(bool(cfg.get("auto_copy_file")))
+        self.copySwitch.checkedChanged.connect(lambda v: cfg.set("auto_copy_file", v))
+        self._row(panel, "下载完成后自动复制文件",
+                  "单个视频下载完成后自动复制到剪贴板，可直接 Ctrl+V 或右键粘贴",
+                  control=self.copySwitch, icon=FIF.COPY)
 
-        self.ffmpegCard = PushSettingCard(
-            "下载组件", FIF.ZIP_FOLDER, "合并组件（ffmpeg）",
-            self._ffmpeg_status_text(), group)
-        self.ffmpegCard.clicked.connect(self._on_download_ffmpeg)
-        group.addSettingCard(self.ffmpegCard)
+        self.ffmpegBtn = PushButton("下载组件", panel)
+        self.ffmpegBtn.clicked.connect(self._on_download_ffmpeg)
+        self.ffmpegRow = self._row(
+            panel, "合并组件（ffmpeg）", self._ffmpeg_status_text(),
+            control=self.ffmpegBtn, icon=FIF.ZIP_FOLDER)
 
-        self.namingCard = SettingCard(
-            FIF.EDIT, "文件命名规则",
-            "「唯一命名」用作品ID+标题+时间戳，同一作品不重名、可增量更新去重", group)
-        self.namingCombo = ComboBox(self.namingCard)
+        # 命名规则
+        self.namingCombo = ComboBox(panel)
+        self.namingCombo.setFixedWidth(_CTRL_W)
         self.namingCombo.addItems(["唯一命名", "日期_时间", "日期_作者_标题",
                                    "日期_标题", "日期_作品ID_标题"])
         rule_map = {"unique_id": 0, "timestamp": 1, "author_title": 2,
@@ -148,46 +196,43 @@ class SettingInterface(ScrollArea):
         self.namingCombo.setCurrentIndex(rule_map.get(cfg.get("naming_rule"), 0))
         self.namingCombo.currentIndexChanged.connect(
             lambda i: cfg.set("naming_rule", rule_keys[i]))
-        self.namingCard.hBoxLayout.addWidget(self.namingCombo, 0, Qt.AlignRight)
-        self.namingCard.hBoxLayout.addSpacing(16)
-        group.addSettingCard(self.namingCard)
+        self._row(panel, "文件命名规则",
+                  "「唯一命名」= 作品ID + 标题 + 时间戳：同一作品不重名、可增量去重",
+                  control=self.namingCombo, icon=FIF.EDIT)
 
-        self.segmentCard = SwitchSettingCard(
-            FIF.SPEED_HIGH, "多连接分段加速",
-            "大于 2MB 的文件用多条连接并行下载（IDM 式加速，实测单连接 "
-            "13 MB/s → 23.8 MB/s）。服务端不支持分段时自动退回单连接",
-            parent=group)
-        self.segmentCard.setChecked(bool(cfg.get("segment_download", True)))
-        self.segmentCard.checkedChanged.connect(
+        # 分段加速
+        self.segmentSwitch = self._switch(panel)
+        self.segmentSwitch.setChecked(bool(cfg.get("segment_download", True)))
+        self.segmentSwitch.checkedChanged.connect(
             lambda v: (cfg.set("segment_download", v),
                        setattr(self.ctx.manager, "_segment_enabled", bool(v))))
-        group.addSettingCard(self.segmentCard)
+        self._row(panel, "多连接分段加速",
+                  "大于 2MB 的文件用多条连接并行下载（实测单连接 13 → 23.8 MB/s）；"
+                  "服务端不支持分段时自动退回单连接",
+                  control=self.segmentSwitch, icon=FIF.SPEED_HIGH)
 
-        # 每文件连接数：IDM 的招牌设置项，默认 8，可调 1-32。
-        # 数值越大越快，但超过带宽上限后只是排队，不会再提速。
-        self.connCard = SettingCard(
-            FIF.LINK, "每文件连接数",
-            "单个文件拆成几条连接并行下载（IDM 默认 8，范围 1-32）。"
-            "并发任务多时会自动摊薄，避免一次开太多连接", group)
-        self.connSpin = SpinBox(self.connCard)
+        # 每文件连接数：1-32，默认 8
+        # 宽度必须给足：qfluentwidgets 的 SpinBox 内建两个 31px 箭头按钮 + 5px 间距，
+        # 96px 只剩 20px 给数字（数字被挤到最左缘、再多一位就裁掉）。
+        # 统一用 _CTRL_W，右侧控件边界才能和其它行对齐。
+        self.connSpin = SpinBox(panel)
+        self.connSpin.setFixedWidth(_CTRL_W)
+        self.connSpin.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.connSpin.setRange(1, 32)
         self.connSpin.setValue(int(cfg.get("segment_connections", 8)))
         self.connSpin.valueChanged.connect(self._on_connections_changed)
-        self.connCard.hBoxLayout.addWidget(self.connSpin, 0, Qt.AlignRight)
-        self.connCard.hBoxLayout.addSpacing(16)
-        group.addSettingCard(self.connCard)
+        self._row(panel, "每文件连接数",
+                  "单个文件拆成几条连接（1-32）。并发任务多时会自动摊薄",
+                  control=self.connSpin, icon=FIF.LINK)
 
-        self.concurrentCard = SettingCard(
-            FIF.SPEED_HIGH, "同时下载数", "下载队列的最大并发任务数（1-8）", group)
-        self.concurrentSpin = SpinBox(self.concurrentCard)
+        self.concurrentSpin = SpinBox(panel)
+        self.concurrentSpin.setFixedWidth(_CTRL_W)
+        self.concurrentSpin.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.concurrentSpin.setRange(1, 8)
         self.concurrentSpin.setValue(int(cfg.get("max_concurrent", 3)))
         self.concurrentSpin.valueChanged.connect(self._on_concurrent_changed)
-        self.concurrentCard.hBoxLayout.addWidget(self.concurrentSpin, 0, Qt.AlignRight)
-        self.concurrentCard.hBoxLayout.addSpacing(16)
-        group.addSettingCard(self.concurrentCard)
-
-        self.vBox.addWidget(group)
+        self._row(panel, "同时下载数", "下载队列的最大并发任务数（1-8）",
+                  control=self.concurrentSpin, icon=FIF.SPEED_HIGH)
 
     # ------------------------------------------------------------------ #
     # ffmpeg 组件（B 站 1080P 及以上要它合并音视频）
@@ -195,28 +240,28 @@ class SettingInterface(ScrollArea):
         from ..core.ffmpeg import ffmpeg_path
         path = ffmpeg_path(self.ctx.config.base_dir)
         if path:
-            return f"已安装：{path}（B 站可选 1080P+，视频音频自动合并）"
-        return "未安装。B 站 1080P 及以上需要它来合并音视频，点右侧下载（约 30MB）"
+            return f"已安装：{path}（B 站可选 1080P+，音视频自动合并）"
+        return "未安装。B 站 1080P 及以上需要它合并音视频，点右侧下载（约 30MB）"
 
     def _on_download_ffmpeg(self):
         from ..core.workers import FFmpegWorker
-        self.ffmpegCard.setEnabled(False)
-        self.ffmpegCard.setContent("正在下载 ffmpeg …")
+        self.ffmpegBtn.setEnabled(False)
+        self.ffmpegRow.set_desc("正在下载 ffmpeg …")
         w = FFmpegWorker(self.ctx.config.base_dir, self)
         w.progress.connect(self._on_ffmpeg_progress)
         w.done.connect(self._on_ffmpeg_done)
-        w.finished.connect(lambda: self.ffmpegCard.setEnabled(True))
+        w.finished.connect(lambda: self.ffmpegBtn.setEnabled(True))
         self._workers.append(w)
         w.start()
 
     def _on_ffmpeg_progress(self, got: int, total: int, msg: str):
         if total:
-            self.ffmpegCard.setContent(f"{msg} {got * 100 // total}%")
+            self.ffmpegRow.set_desc(f"{msg} {got * 100 // total}%")
         else:
-            self.ffmpegCard.setContent(msg)
+            self.ffmpegRow.set_desc(msg)
 
     def _on_ffmpeg_done(self, ok: bool, msg: str):
-        self.ffmpegCard.setContent(self._ffmpeg_status_text())
+        self.ffmpegRow.set_desc(self._ffmpeg_status_text())
         if ok:
             InfoBar.success("组件已就绪", "ffmpeg 已安装，B 站可选 1080P 及以上",
                             orient=Qt.Horizontal, isClosable=True,
@@ -225,22 +270,18 @@ class SettingInterface(ScrollArea):
             InfoBar.error("下载失败", msg, orient=Qt.Horizontal, isClosable=True,
                           position=InfoBarPosition.TOP, duration=5000, parent=self)
 
+    # ------------------------------------------------------------------ #
     def _build_account_group(self):
-        """账号与登录：一张卡 = 一个平台。
-
-        改前：「网络」组把 6 个平台的登录与 Cookie 摊成 11 张结构完全相同的卡片，
-        找「小红书 Cookie」要扫 11 行。改后按平台聚合，一屏 6 行，每行右侧直接
-        给出该平台的两个入口，左侧是真实登录态。
-        """
-        group = SettingCardGroup("账号与登录", self.view)
+        """账号与登录：一行 = 一个平台，右侧是真实登录态 + 两个入口"""
+        panel = self._group("账号与登录",
+                            "登录态存在本地；「网页登录」会自动保存，不用手动抄 Cookie")
         for key, icon, name, desc, cfg_key, token, profile_attr in _PLATFORM_SPECS:
-            card = AccountCard(icon, name, desc, group)
-            card.loginRequested.connect(lambda k=key: self._on_login(k))
-            card.cookieRequested.connect(lambda k=key: self._on_config_cookie(k))
-            group.addSettingCard(card)
-            self.accountCards[key] = (card, cfg_key, token, profile_attr)
+            row = AccountRow(icon, name, desc, panel)
+            row.loginRequested.connect(lambda k=key: self._on_login(k))
+            row.cookieRequested.connect(lambda k=key: self._on_config_cookie(k))
+            panel.body.addWidget(row)
+            self.accountCards[key] = (row, cfg_key, token, profile_attr)
         self._refresh_account_state()
-        self.vBox.addWidget(group)
 
     # ------------------------------------------------------------------ #
     # 账号：登录态 / 网页登录 / 填 Cookie
@@ -261,22 +302,24 @@ class SettingInterface(ScrollArea):
         见 account_card.profile_logged_in）。
         """
         cfg = self.ctx.config
-        for key, (card, cfg_key, token, profile_attr) in self.accountCards.items():
+        for key, (row, cfg_key, token, profile_attr) in self.accountCards.items():
+            if row.is_busy():
+                continue
             logged = profile_logged_in(getattr(cfg, profile_attr, "") or "", token)
             filled = token in (cfg.get(cfg_key, "") or "")
             if logged:
-                card.set_state(STATE_LOGIN)
+                row.set_state(STATE_LOGIN)
             elif filled:
-                card.set_state(STATE_COOKIE)
+                row.set_state(STATE_COOKIE)
             else:
-                card.set_state(STATE_NONE)
+                row.set_state(STATE_NONE)
 
     def _on_login(self, key: str):
         """网页登录：开有头浏览器，用户登录完自动落地登录态（推荐路径）"""
         from ..core.workers import LoginWorker
-        card, _, _, profile_attr = self.accountCards[key]
+        row, _, _, profile_attr = self.accountCards[key]
         name = _NAME_OF.get(key, "")
-        card.set_busy(True)
+        row.set_busy(True)
         w = LoginWorker(getattr(self.ctx.config, profile_attr), site=key, parent=self)
         w.cookie_ready.connect(lambda c, k=key: self._on_login_cookie(k, c))
         w.done.connect(lambda ok, msg, k=key: self._on_login_done(k, ok, msg))
@@ -326,30 +369,25 @@ class SettingInterface(ScrollArea):
                             orient=Qt.Horizontal, isClosable=True,
                             position=InfoBarPosition.TOP, duration=2000, parent=self)
 
+    # ------------------------------------------------------------------ #
     def _build_personal_group(self):
         cfg = self.ctx.config
-        group = SettingCardGroup("个性化", self.view)
+        panel = self._group("外观与动效", "只影响界面，不影响下载行为")
 
-        self.themeCard = SettingCard(
-            FIF.BRUSH, "应用主题", "调整应用的界面外观", group)
-        self.themeCombo = ComboBox(self.themeCard)
+        self.themeCombo = ComboBox(panel)
+        self.themeCombo.setFixedWidth(_CTRL_W)
         self.themeCombo.addItems(["深色", "浅色", "跟随系统"])
         theme_map = {"dark": 0, "light": 1, "auto": 2}
         theme_keys = ["dark", "light", "auto"]
         self.themeCombo.setCurrentIndex(theme_map.get(cfg.get("theme"), 0))
         self.themeCombo.currentIndexChanged.connect(
             lambda i: self._on_theme_changed(theme_keys[i]))
-        self.themeCard.hBoxLayout.addWidget(self.themeCombo, 0, Qt.AlignRight)
-        self.themeCard.hBoxLayout.addSpacing(16)
-        group.addSettingCard(self.themeCard)
+        self._row(panel, "应用主题", "深色 / 浅色 / 跟随系统；侧栏底部也能一键切换",
+                  control=self.themeCombo, icon=FIF.BRUSH)
 
         # 强调色：全局只有一个色相，主按钮 / 进度条 / 开关 / 选中态都跟着它走。
-        # 切换即时生效（setThemeColor 会重刷所有已注册的样式），不需要重启。
-        self.accentCard = SettingCard(
-            FIF.PALETTE, "强调色",
-            "主按钮、进度条、开关与选中态的颜色。qfluentwidgets 会按主题自动派生深浅两套",
-            group)
-        self.accentCombo = ComboBox(self.accentCard)
+        self.accentCombo = ComboBox(panel)
+        self.accentCombo.setFixedWidth(_CTRL_W)
         self.accentCombo.addItems([label for _, label, _ in D.ACCENTS])
         accent_keys = [key for key, _, _ in D.ACCENTS]
         cur = cfg.get("accent_color", D.DEFAULT_ACCENT)
@@ -357,30 +395,26 @@ class SettingInterface(ScrollArea):
                                         if cur in accent_keys else 0)
         self.accentCombo.currentIndexChanged.connect(
             lambda i: self._on_accent_changed(accent_keys[i]))
-        self.accentCard.hBoxLayout.addWidget(self.accentCombo, 0, Qt.AlignRight)
-        self.accentCard.hBoxLayout.addSpacing(16)
-        group.addSettingCard(self.accentCard)
+        self._row(panel, "强调色",
+                  "主按钮、进度条、开关与选中态的颜色；切换即时生效",
+                  control=self.accentCombo, icon=FIF.PALETTE)
 
         # Mica 云母特效：观感好但需要持续合成，低配机器上会拖慢滚动
-        self.micaCard = SwitchSettingCard(
-            FIF.TRANSPARENT, "窗口云母特效",
-            "半透明磨砂背景（需 Win11）。如界面滚动卡顿可关闭以提升流畅度",
-            parent=group)
-        self.micaCard.setChecked(bool(cfg.get("mica_effect", False)))
-        self.micaCard.checkedChanged.connect(self._on_mica_changed)
-        group.addSettingCard(self.micaCard)
+        self.micaSwitch = self._switch(panel)
+        self.micaSwitch.setChecked(bool(cfg.get("mica_effect", False)))
+        self.micaSwitch.checkedChanged.connect(self._on_mica_changed)
+        self._row(panel, "窗口云母特效",
+                  "半透明磨砂背景（需 Win11）；界面滚动卡顿时可关闭以提升流畅度",
+                  control=self.micaSwitch, icon=FIF.TRANSPARENT)
 
         # 动效：只做状态反馈与入场（120~300ms，ease-out），不做装饰性动画。
         # 开关语义是「开启动效」，配置里存的是反过来的 reduce_motion。
-        self.motionCard = SwitchSettingCard(
-            FIF.SYNC, "界面动效",
-            "卡片入场与页面切换的过渡动画。远程桌面或低配机器上可关闭，界面会更干脆",
-            parent=group)
-        self.motionCard.setChecked(not bool(cfg.get("reduce_motion", False)))
-        self.motionCard.checkedChanged.connect(self._on_motion_changed)
-        group.addSettingCard(self.motionCard)
-
-        self.vBox.addWidget(group)
+        self.motionSwitch = self._switch(panel)
+        self.motionSwitch.setChecked(not bool(cfg.get("reduce_motion", False)))
+        self.motionSwitch.checkedChanged.connect(self._on_motion_changed)
+        self._row(panel, "界面动效",
+                  "卡片入场与页面切换的过渡；远程桌面或低配机器上可关闭，界面更干脆",
+                  control=self.motionSwitch, icon=FIF.SYNC)
 
     def _on_motion_changed(self, on: bool):
         D.set_reduce_motion(not on)
@@ -398,22 +432,28 @@ class SettingInterface(ScrollArea):
         else:
             self.ctx.config.set("mica_effect", on)
 
+    # ------------------------------------------------------------------ #
     def _build_about_group(self):
         from .. import __version__
         from ..core.applog import log_path
-        group = SettingCardGroup("关于", self.view)
-        card = HyperlinkCard(
-            "https://github.com/VideoData/DY-Data",
-            "功能参考", FIF.GITHUB, f"视频下载器 v{__version__}",
-            "功能设计参考 VideoData/DY-Data；界面风格参考 moesnow/March7thAssistant",
-            group)
-        group.addSettingCard(card)
-        self.logCard = PushSettingCard(
-            "打开日志文件夹", FIF.FOLDER, "运行日志",
-            log_path() or "日志未启用（程序目录不可写）", group)
-        self.logCard.clicked.connect(self._on_open_log)
-        group.addSettingCard(self.logCard)
-        self.vBox.addWidget(group)
+        panel = self._group("关于", "版本、日志与致谢")
+
+        versionRow = W.SettingRow(
+            f"视频下载器 v{__version__}",
+            "个人自用的多站点下载工具：链接解析、去水印、批量下载、本地漫画书架",
+            panel, icon=FIF.INFO)
+        panel.body.addWidget(versionRow)
+
+        self.logBtn = PushButton("打开文件夹", panel)
+        self.logBtn.clicked.connect(self._on_open_log)
+        self.logRow = self._row(
+            panel, "运行日志", log_path() or "日志未启用（程序目录不可写）",
+            control=self.logBtn, icon=FIF.FOLDER)
+
+        from ..core.applog import log_path as _lp
+        path = _lp()
+        if path:
+            self.logRow.descLabel.setText(f"{path}（解析与下载的关键节点都在这里）")
 
     def _on_open_log(self):
         """打开 logs 目录：出错时的现场都写在 app.log 里"""
@@ -432,7 +472,11 @@ class SettingInterface(ScrollArea):
             self, "选择下载目录", self.ctx.config.get("download_path"))
         if path:
             self.ctx.config.set("download_path", path)
-            self.folderCard.setContent(path)
+            self.folderRow.set_desc(path)
+            # 状态条右侧显示的保存目录要立刻跟着变
+            win = self.window()
+            if hasattr(win, "_refresh_status"):
+                win._refresh_status()
 
     def _on_concurrent_changed(self, v: int):
         self.ctx.config.set("max_concurrent", v)

@@ -17,6 +17,7 @@ from ..core.models import (VideoInfo, is_already_downloaded, quality_html,
 from ..core.site_ctx import SiteContext
 from ..core.workers import LoginWorker, UserResolveWorker, UserVideosWorker
 from . import design as D
+from . import workspace as W
 
 COL_CHECK, COL_TITLE, COL_TYPE, COL_DURATION, COL_QUALITY, COL_DIGG, COL_COMMENT = range(7)
 
@@ -32,7 +33,7 @@ class BatchInterface(ScrollArea):
         self.view = QWidget(self)
         self.view.setObjectName("batchView")
         self.setWidget(self.view)
-        self.vBox = D.page_layout(self.view)
+        self.vBox = W.page_body(self.view, pad=24, spacing=12)
 
         self.sec_uid = ""
         self.nickname = ""
@@ -54,61 +55,71 @@ class BatchInterface(ScrollArea):
         self.view.setStyleSheet("QWidget#batchView { background: transparent; }")
 
     def _build_header(self):
-        self.vBox.addWidget(D.PageHeader(
+        self.vBox.addWidget(W.PageHeading(
             "批量下载",
-            "粘贴作者主页链接　·　抓取全部公开作品后勾选下载　·　未登录只能拿到第一页",
+            "粘贴作者主页链接，抓取全部公开作品后勾选下载；未登录通常只能拿到第一页。",
             self.view))
 
     def _build_input_card(self):
-        card, lay = D.card(self.view)
-        lay.addWidget(D.section_label("用户主页", card))
-
+        card = W.Panel(self.view, padding=(16, 12, 16, 10), spacing=8)
         row = QHBoxLayout()
         row.setSpacing(D.GAP_SM)
         self.linkEdit = LineEdit(card)
+        self.linkEdit.setFixedHeight(34)
         self.linkEdit.setPlaceholderText(
-            "例如：https://www.douyin.com/user/MS4wLjAB… 或用户分享短链")
+            "作者主页链接，例如 https://www.douyin.com/user/MS4wLjAB… 或用户分享短链")
         self.linkEdit.setClearButtonEnabled(True)
         self.linkEdit.returnPressed.connect(self._on_fetch)
         row.addWidget(self.linkEdit, 1)
+
         pasteBtn = PushButton(FIF.PASTE, "粘贴", card)
+        pasteBtn.setToolTip("从剪贴板粘贴链接")
         pasteBtn.clicked.connect(self._on_paste)
         self.loginBtn = PushButton(FIF.PEOPLE, "登录抖音", card)
         self.loginBtn.setToolTip("扫码登录后可抓取全部作品（未登录只能抓取第一页）")
         self.loginBtn.clicked.connect(self._on_login)
         self.fetchBtn = PrimaryPushButton(FIF.PEOPLE, "获取作品列表", card)
+        self.fetchBtn.setFixedHeight(34)
         self.fetchBtn.clicked.connect(self._on_fetch)
         row.addWidget(pasteBtn)
         row.addWidget(self.loginBtn)
         row.addWidget(self.fetchBtn)
-        lay.addLayout(row)
+        card.body.addLayout(row)
 
-        self.userLabel = D.hint_label("", card)
-        lay.addWidget(self.userLabel)
+        self.userLabel = W.text_label(
+            "未登录只返回第一页；「增量更新」会按作品 ID 跳过已下载的",
+            card, D.TEXT_TERTIARY, D.FONT_CAPTION, wrap=True)
+        card.body.addWidget(self.userLabel)
 
         self.progress = IndeterminateProgressBar(card)
-        self.progress.setFixedHeight(4)
+        self.progress.setFixedHeight(3)
         self.progress.hide()
-        lay.addWidget(self.progress)
+        card.body.addWidget(self.progress)
         self.vBox.addWidget(card)
 
     def _build_table_card(self):
-        card, lay = D.card(self.view)
+        card = W.Panel(self.view, padding=(16, 12, 16, 12), spacing=10)
 
         toolbar = QHBoxLayout()
         toolbar.setSpacing(D.GAP_SM)
-        self.countLabel = D.section_label("作品列表", card)
+        self.countLabel = W.text_label("作品列表", card, D.TEXT_PRIMARY,
+                                       D.FONT_BODY, D.W_SEMI)
         toolbar.addWidget(self.countLabel)
+        toolbar.addSpacing(D.GAP_SM)
+
         self.incrementalSwitch = SwitchButton(card)
+        self.incrementalSwitch.setOnText("")
+        self.incrementalSwitch.setOffText("")
         self.incrementalSwitch.setChecked(True)
         self.incrementalSwitch.setToolTip(
             "开启后按作品ID比对下载目录：已下过的自动取消勾选并标注「已下载」，"
             "只补下新增作品（不再重复下载）")
-        incLabel = D.hint_label("增量更新", card)
+        incLabel = W.text_label("增量更新", card, D.TEXT_SECONDARY, D.FONT_CAPTION)
         incLabel.setToolTip(self.incrementalSwitch.toolTip())
         toolbar.addWidget(incLabel)
         toolbar.addWidget(self.incrementalSwitch)
         toolbar.addStretch(1)
+
         self.selectAllBtn = PushButton(FIF.ACCEPT_MEDIUM, "全选", card)
         self.selectAllBtn.clicked.connect(lambda: self._set_all_checked(True))
         self.selectNoneBtn = PushButton(FIF.CLOSE, "全不选", card)
@@ -123,15 +134,15 @@ class BatchInterface(ScrollArea):
         toolbar.addWidget(self.selectNoneBtn)
         toolbar.addWidget(self.loadMoreBtn)
         toolbar.addWidget(self.downloadBtn)
-        lay.addLayout(toolbar)
+        card.body.addLayout(toolbar)
 
         self.table = TableWidget(card)
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels(
             ["选择", "标题", "类型", "时长", "画质", "点赞", "评论"])
         self.table.verticalHeader().hide()
-        self.table.setBorderVisible(True)
-        self.table.setBorderRadius(8)
+        self.table.setBorderVisible(False)
+        self.table.setBorderRadius(D.RADIUS_MD)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setWordWrap(False)
@@ -139,13 +150,16 @@ class BatchInterface(ScrollArea):
         header.setSectionResizeMode(COL_CHECK, QHeaderView.Fixed)
         self.table.setColumnWidth(COL_CHECK, 50)
         header.setSectionResizeMode(COL_TITLE, QHeaderView.Stretch)
-        for c in (COL_TYPE, COL_DURATION, COL_QUALITY, COL_DIGG, COL_COMMENT):
-            header.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        # 其余列固定宽度：批量场景里数值会变（点赞/评论），ResizeToContents
+        # 会让整个表格在加载过程中左右抖动（与任务页同一个坑）
+        for c, width in ((COL_TYPE, 96), (COL_DURATION, 88),
+                         (COL_QUALITY, 220), (COL_DIGG, 84), (COL_COMMENT, 82)):
+            header.setSectionResizeMode(c, QHeaderView.Fixed)
+            self.table.setColumnWidth(c, width)
         self.table.setMinimumHeight(320)
-        lay.addWidget(self.table)
-        self.vBox.addWidget(card)
+        card.body.addWidget(self.table, 1)
+        self.vBox.addWidget(card, 1)
 
-    # ------------------------------------------------------------------ #
     def _on_paste(self):
         text = (QGuiApplication.clipboard().text() or "").strip()
         if text:

@@ -1,5 +1,22 @@
 # -*- coding: utf-8 -*-
-"""下载任务页：进度、状态、操作"""
+"""下载任务页：进度、状态、操作与运行日志
+
+界面重做的结构：
+
+    页头（任务统计 + 全局操作）
+    ┌ 队列面板 ─────────────────────────────────────────────┐
+    │ [全部 n] [进行中 n] [已完成 n] [失败 n]   ← 分段筛选   │
+    │ 表格：操作 / 文件名 / 大小 / 进度 / 速度 / 画质 / 状态 │
+    └───────────────────────────────────────────────────────┘
+    ┌ 日志面板（可折叠，默认收起成一行摘要）─────────────────┐
+
+为什么加筛选：任务一多，「失败的在哪」只能靠肉眼在长表里找；分段控件把
+统计从文字变成可点的筛选项，统计与操作合一（文字仍然保留在分段项里）。
+
+⚠️ 表格列宽禁忌（历史事故）：文件名列 Stretch 时右侧**绝不能有
+ResizeToContents 列**，否则进度条会随文本变化左右漂移。这里沿用固定列宽；
+「操作」列固定在最左，任何窗口宽度下都可见（2026-10-14 用户报看不见取消键）。
+"""
 import logging
 import os
 import shutil
@@ -17,14 +34,13 @@ from qfluentwidgets import (FluentIcon as FIF, InfoBar, InfoBarPosition,
 from ..core import applog
 from ..core.models import DownloadTaskInfo, fmt_size, fmt_speed, quality_html
 from . import design as D
+from . import workspace as W
 from .perf import ProgressThrottle
 from ..core.applog import get_logger
 
 # ⚠️ 「操作」列必须放在**最左边**，不能放最右。
 # 原因（2026-10-14 用户报「看不见取消按键」）：固定列宽合计 1150px，而主窗口
-# 默认只有 1100px（main_window.py 的 `self.resize(1100, 720)`）—— 放最右时
-# 「操作」列被推到视口外（实测取消按钮右边界 1038px、视口仅 983px），
-# **默认就看不见，要手动拖宽窗口或拉横向滚动条才出来**。
+# 默认只有 1100px —— 放最右时「操作」列被推到视口外，默认就看不见。
 # 移到最左后，无论窗口多窄、横向怎么滚动，取消/重试/打开/删除始终可见。
 COL_ACTION, COL_NAME, COL_SIZE, COL_PROGRESS, COL_SPEED, COL_QUALITY, \
     COL_STATUS = range(7)
@@ -32,15 +48,17 @@ COL_ACTION, COL_NAME, COL_SIZE, COL_PROGRESS, COL_SPEED, COL_QUALITY, \
 # 各列固定宽度（px）。**必须固定，不能用 ResizeToContents**：
 # 文件名列是 Stretch，右侧任何一列随文本变宽变窄，都会把 Stretch 列挤窄，
 # 导致进度条在整个下载过程中水平位置持续漂移（用户 2026-10-04 反馈）。
-# 尺寸按各列最长可能文本实测（见 _scratch_x_probe），只给文件名列留弹性。
 _COL_WIDTHS = {
-    COL_ACTION: 180,     # 固定在最左；图集任务额外提供阅读按钮
-    COL_SIZE: 100,       # -- / 3.5 MB / 128.9 MB / 2.4 GB
-    COL_PROGRESS: 170,   # 进度条（160）+ 左右留白
-    COL_SPEED: 120,      # -- / 12.3 MB/s
-    COL_QUALITY: 360,    # 2160×3840 · 21000kbps · 27fps（实测 348px + 内边距）
-    COL_STATUS: 150,     # 等待中 / 下载中 / 合并中 / 已完成 / 失败：…
+    COL_ACTION: 180,     # 固定在最左；图集任务额外提供阅读按钮（测试守这条）
+    COL_SIZE: 112,       # 实测「120/300 张」=126px（含单元格左右内距）
+    COL_PROGRESS: 132,   # 进度条（108）+ 左右留白
+    COL_SPEED: 118,      # 实测「99.9 MB/s」=126px 的 0.9 倍（正常值 6.0 MB/s 仅 74px）
+    COL_QUALITY: 220,    # 实测「1080p · 8200kbps · 60fps」=272px，超出省略（完整值见 tooltip）
+    COL_STATUS: 88,      # 实测状态文字 42px（含内距），失败原因走 tooltip
 }
+# 固定列合计 812px。默认窗口 1280 宽时内容区约 1000px，文件名列仍能拿到
+# 约 190px 的弹性宽度；更窄的窗口靠横向滚动条，核心的「操作」列固定在
+# 最左始终可见（见文件头的历史事故说明）。
 
 # 日志面板：轮询间隔 / 面板保留行数 / 打开页面时先回看多少行
 LOG_POLL_MS = 400
@@ -51,6 +69,14 @@ _LOG_COLORS = {
     logging.ERROR: "#E5484D",
     logging.CRITICAL: "#E5484D",
 }
+
+# 筛选分段：索引与状态集合对应（0 = 全部）
+_FILTERS = [
+    ("全部", None),
+    ("进行中", ("下载中", "等待中", "合并中")),
+    ("已完成", ("已完成",)),
+    ("失败", ("失败", "已取消")),
+]
 
 log = get_logger("task")
 
@@ -68,9 +94,10 @@ class TaskInterface(ScrollArea):
         self.view = QWidget(self)
         self.view.setObjectName("taskView")
         self.setWidget(self.view)
-        self.vBox = D.page_layout(self.view)
+        self.vBox = W.page_body(self.view, pad=24, spacing=12)
 
         self._rows = {}   # task_id -> row
+        self._filter = 0
         # 进度更新节流：把高频的进度信号合并成低频刷新，避免 UI 线程被压满
         self._throttle = ProgressThrottle(120, self)
         self._throttle.set_handler(self._apply_updates)
@@ -92,6 +119,8 @@ class TaskInterface(ScrollArea):
         m.task_progress.connect(self._on_task_update)
         m.task_finished.connect(self._on_task_update)
         self._init_style()
+        # 启动时就按"当前没有任务"摆好显隐与计数（否则首屏会是一张空表头）
+        self._refresh_summary()
 
     def showEvent(self, event):
         """切回本页时立刻补一次日志，别等到下一个轮询周期"""
@@ -101,29 +130,42 @@ class TaskInterface(ScrollArea):
     def _init_style(self):
         self.view.setStyleSheet("QWidget#taskView { background: transparent; }")
 
+    # ------------------------------------------------------------------ #
     def _build_header(self):
-        self.vBox.addWidget(D.PageHeader(
+        head = QHBoxLayout()
+        head.setSpacing(D.GAP_SM)
+        self.heading = W.PageHeading(
             "下载任务",
-            "进度与队列管理　·　底部运行日志记录解析与下载的关键节点",
-            self.view))
+            "队列进度与失败重试都在这里；底部日志记录解析与下载的关键节点。",
+            self.view)
+        head.addWidget(self.heading, 1)
+        self.openBtn = PushButton(FIF.FOLDER, "打开目录", self.view)
+        self.openBtn.setToolTip("打开下载目录（也可以点窗口底部的状态条）")
+        self.openBtn.clicked.connect(self._open_download_dir)
+        self.retryFailedBtn = PushButton(FIF.SYNC, "重试失败", self.view)
+        self.retryFailedBtn.clicked.connect(self._retry_failed)
+        self.clearBtn = PushButton(FIF.DELETE, "清空已完成", self.view)
+        self.clearBtn.clicked.connect(self._clear_finished)
+        head.addWidget(self.openBtn, 0, Qt.AlignBottom)
+        head.addWidget(self.retryFailedBtn, 0, Qt.AlignBottom)
+        head.addWidget(self.clearBtn, 0, Qt.AlignBottom)
+        self.vBox.addLayout(head)
 
     def _build_table(self):
-        card, lay = D.card(self.view)
+        card = W.Panel(self.view, padding=(16, 12, 16, 12), spacing=10)
 
         toolbar = QHBoxLayout()
-        self.summaryLabel = D.section_label("暂无任务", card)
+        toolbar.setSpacing(D.GAP_SM)
+        self.summaryLabel = W.text_label("暂无任务", card, D.TEXT_PRIMARY,
+                                         D.FONT_BODY, D.W_SEMI)
         toolbar.addWidget(self.summaryLabel)
+        toolbar.addSpacing(D.GAP_SM)
+        self.filterTabs = W.SegmentedTabs([name for name, _ in _FILTERS], card,
+                                          height=28, min_width=64)
+        self.filterTabs.changed.connect(self._on_filter_changed)
+        toolbar.addWidget(self.filterTabs)
         toolbar.addStretch(1)
-        openBtn = PushButton(FIF.FOLDER, "打开下载目录", card)
-        openBtn.clicked.connect(self._open_download_dir)
-        self.retryFailedBtn = PushButton(FIF.SYNC, "重试失败", card)
-        self.retryFailedBtn.clicked.connect(self._retry_failed)
-        clearBtn = PushButton(FIF.DELETE, "清空已完成", card)
-        clearBtn.clicked.connect(self._clear_finished)
-        toolbar.addWidget(openBtn)
-        toolbar.addWidget(self.retryFailedBtn)
-        toolbar.addWidget(clearBtn)
-        lay.addLayout(toolbar)
+        card.body.addLayout(toolbar)
 
         self.table = TableWidget(card)
         self.table.setColumnCount(7)
@@ -131,14 +173,15 @@ class TaskInterface(ScrollArea):
         self.table.setHorizontalHeaderLabels(
             ["操作", "文件名", "大小", "进度", "速度", "画质", "状态"])
         self.table.verticalHeader().hide()
-        self.table.setBorderVisible(True)
-        self.table.setBorderRadius(8)
+        self.table.setBorderVisible(False)
+        self.table.setBorderRadius(D.RADIUS_MD)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # 单行 + 省略号：文件名很长时折行会把行高撑成两三行，整张表跟着抖
+        self.table.setWordWrap(False)
         header = self.table.horizontalHeader()
         # 只让文件名列吸收剩余宽度；其余列全部固定，避免下载中文本变化
         # 引起列宽抖动、把进度条挤得左右乱跑（见 _COL_WIDTHS 说明）。
-        # 操作列也必须固定：它靠左，固定宽度才能保证按钮不会被压扁。
         header.setSectionResizeMode(COL_NAME, QHeaderView.Stretch)
         for c in (COL_ACTION, COL_SIZE, COL_PROGRESS, COL_SPEED, COL_QUALITY,
                   COL_STATUS):
@@ -146,51 +189,52 @@ class TaskInterface(ScrollArea):
             self.table.setColumnWidth(c, _COL_WIDTHS[c])
         self.table.setMinimumHeight(360)
         self.table.setMinimumWidth(0)
-        # 横向滚动条**始终显示**：固定列合计 1050px，比默认窗口下的表格视口
-        # （约 1000px）宽，最右的「状态」列会被挤出可视区。让它常驻，用户
-        # 一眼就知道右边还有内容可滚 —— 否则会以为「列没了」（2026-10-14
-        # 用户报「看不见取消按键」时，就是因为没有这个提示而不知道要横向滚）。
-        # 核心操作（操作列）已固定在最左，不受影响。
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        lay.addWidget(self.table)
+        # 横向滚动条**按需显示**：固定列合计仍可能超过视口，最右的「状态」列
+        # 会被挤出去；核心操作（操作列）固定在最左，不受影响。
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        card.body.addWidget(self.table, 1)
 
-        self.emptyLabel = D.hint_label(
-            "暂无下载任务。在「视频解析」或「批量下载」页面开始下载后，任务会显示在这里",
-            card)
-        self.emptyLabel.setAlignment(Qt.AlignCenter)
-        lay.addWidget(self.emptyLabel)
-        self.vBox.addWidget(card)
+        self.emptyLabel = W.EmptyState(
+            FIF.DOWNLOAD, "还没有下载任务",
+            "从「视频解析」或「批量下载」开始，任务会出现在这里。", card)
+        self.emptyLabel.hide()
+        card.body.addWidget(self.emptyLabel)
+        self.vBox.addWidget(card, 1)
 
     def _build_log_card(self):
         """运行日志面板：解析/下载的关键节点都在这儿，出问题不用再去翻文件"""
-        card, lay = D.card(self.view)
+        card = W.Panel(self.view, padding=(16, 10, 16, 12), spacing=8)
 
         head = QHBoxLayout()
-        head.addWidget(D.section_label("运行日志", card))
+        head.setSpacing(D.GAP_SM)
+        self.logTitle = W.PanelTitle("运行日志", card)
+        head.addWidget(self.logTitle, 1)
         # 这里只显示相对路径，完整路径放 tooltip：标签太长会把右边的按钮挤出窗口
         path = applog.log_path()
-        self.logHint = D.hint_label(
-            f"日志文件：{os.path.join('logs', 'app.log')}" if path
-            else "日志未启用（程序目录不可写）", card)
+        self.logHint = W.text_label(
+            f"{os.path.join('logs', 'app.log')}" if path else "日志未启用",
+            card, D.TEXT_TERTIARY, D.FONT_CAPTION)
         self.logHint.setToolTip(
             f"完整路径：{path}\n下载与解析的关键节点都记在这里（面板只保留最近 "
             f"{LOG_VIEW_LINES} 行，文件里是全量的）" if path
             else "程序目录不可写，日志没有启用")
-        head.addSpacing(8)
         head.addWidget(self.logHint)
-        head.addStretch(1)
 
-        copyBtn = PushButton(FIF.COPY, "复制", card)
-        copyBtn.setToolTip("把面板里的日志复制到剪贴板")
-        copyBtn.clicked.connect(self._copy_log)
-        clearBtn = PushButton(FIF.DELETE, "清空显示", card)
-        clearBtn.setToolTip("只清空这里的显示，不影响 logs\\app.log 文件")
-        clearBtn.clicked.connect(self._clear_log_view)
-        openBtn = PushButton(FIF.DOCUMENT, "打开日志文件", card)
-        openBtn.clicked.connect(self._open_log_file)
-        for btn in (copyBtn, clearBtn, openBtn):
+        self.copyLogBtn = PushButton(FIF.COPY, "复制", card)
+        self.copyLogBtn.setToolTip("把面板里的日志复制到剪贴板")
+        self.copyLogBtn.clicked.connect(self._copy_log)
+        self.clearLogBtn = PushButton(FIF.DELETE, "清空显示", card)
+        self.clearLogBtn.setToolTip("只清空这里的显示，不影响 logs/app.log 文件")
+        self.clearLogBtn.clicked.connect(self._clear_log_view)
+        self.openLogBtn = PushButton(FIF.DOCUMENT, "打开文件", card)
+        self.openLogBtn.clicked.connect(self._open_log_file)
+        self.toggleLogBtn = TransparentToolButton(FIF.UP, card)
+        self.toggleLogBtn.setToolTip("收起 / 展开日志面板")
+        self.toggleLogBtn.clicked.connect(self._toggle_log)
+        for btn in (self.copyLogBtn, self.clearLogBtn, self.openLogBtn):
             head.addWidget(btn)
-        lay.addLayout(head)
+        head.addWidget(self.toggleLogBtn)
+        card.body.addLayout(head)
 
         self.logView = PlainTextEdit(card)
         self.logView.setReadOnly(True)
@@ -201,15 +245,25 @@ class TaskInterface(ScrollArea):
         self.logView.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         # 超过上限自动丢最旧的行：挂一整天也不会越滚越卡
         self.logView.setMaximumBlockCount(LOG_VIEW_LINES)
-        self.logView.setMinimumHeight(200)
-        self.logView.setMaximumHeight(240)
+        self.logView.setMinimumHeight(150)
+        self.logView.setMaximumHeight(220)
         self.logView.setPlaceholderText("暂无日志")
         font = QFont("Consolas")
         font.setStyleHint(QFont.Monospace)
         font.setPointSize(9)
         self.logView.setFont(font)
-        lay.addWidget(self.logView)
+        card.body.addWidget(self.logView)
+        self.logCard = card
         self.vBox.addWidget(card)
+
+    def _toggle_log(self):
+        shown = not self.logView.isVisible()
+        self.logView.setVisible(shown)
+        self.logHint.setVisible(shown)
+        for btn in (self.copyLogBtn, self.clearLogBtn, self.openLogBtn):
+            btn.setVisible(shown)
+        self.toggleLogBtn.setIcon(FIF.UP if shown else FIF.DOWN)
+        self.toggleLogBtn.setToolTip("收起日志面板" if shown else "展开日志面板")
 
     # ------------------------------------------------------------------ #
     # 日志面板
@@ -277,7 +331,7 @@ class TaskInterface(ScrollArea):
         bar = ProgressBar(self.table)
         bar.setRange(0, 100)
         bar.setValue(0)
-        bar.setFixedWidth(150)
+        bar.setFixedWidth(116)
         holder = QWidget(self.table)
         hb = QHBoxLayout(holder)
         hb.setContentsMargins(8, 0, 8, 0)
@@ -318,6 +372,7 @@ class TaskInterface(ScrollArea):
             h.addWidget(readBtn)
         h.addWidget(delBtn)
         self.table.setCellWidget(row, COL_ACTION, actions)
+        self._apply_row_filter(row, info)
         self._refresh_summary()
 
     def _progress_bar_at(self, row: int):
@@ -375,40 +430,68 @@ class TaskInterface(ScrollArea):
                     speed_item.setText(txt)
             status_item = self.table.item(row, COL_STATUS)
             if status_item:
-                if info.status == "失败" and info.error:
-                    text = f"失败：{info.error[:30]}"
-                elif info.status == "已取消":
-                    text = "已取消"
-                else:
-                    text = info.status
+                # 状态列只写状态本身（列只有 84px），错误原因放 tooltip + 摘要下方
+                text = info.status
                 if status_item.text() != text:
                     status_item.setText(text)
-                    status_item.setToolTip(info.error)
+                    status_item.setToolTip(
+                        f"失败原因：{info.error}" if info.error else info.status)
+            self._apply_row_filter(row, info)
         self._refresh_summary()
 
     def _refresh_summary(self):
-        """增量统计：任务列表变化时才重算，避免每次进度更新都全量遍历"""
+        """摘要 + 分段计数：任务状态变化时才重算，避免每次进度更新都全量遍历"""
         tasks = self.ctx.manager.all_tasks()
         count = len(tasks)
-        has_task = bool(tasks)
-        if self.table.isVisible() != has_task:
-            self.table.setVisible(has_task)
-            self.emptyLabel.setVisible(not has_task)
+        # 没有任务时连表头一起收起来：空表头会让"空"看起来像是加载失败。
+        # 用 isHidden() 而不是 isVisible()：页面还没被切到、窗口还没 show 时
+        # isVisible() 恒为 False，拿它判断会把"该隐藏"误判成"已经隐藏"。
+        show_table = count > 0
+        if self.table.isHidden() != (not show_table):
+            self.table.setVisible(show_table)
+        if self.emptyLabel.isHidden() != show_table:
+            self.emptyLabel.setVisible(not show_table)
+        counts = []
+        for _, statuses in _FILTERS:
+            if statuses is None:
+                counts.append(count)
+            else:
+                counts.append(sum(1 for t in tasks if t.status in statuses))
+        labels = [f"{name} {n}" for (name, _), n in zip(_FILTERS, counts)]
+        for i, label in enumerate(labels):
+            self.filterTabs.set_item_text(i, label)
+        self.filterTabs.setMinimumWidth(76 * len(labels))
+        done, running, failed = counts[2], counts[1], counts[3]
         if not tasks:
-            if self.summaryLabel.text() != "暂无任务":
-                self.summaryLabel.setText("暂无任务")
-            return
-        done = 0
-        running = 0
-        for t in tasks:
-            s = t.status
-            if s == "已完成":
-                done += 1
-            elif s in ("下载中", "等待中"):
-                running += 1
-        text = f"共 {count} 个任务 · 进行中 {running} · 已完成 {done}"
+            text = "暂无任务"
+        else:
+            text = f"共 {count} 个任务"
+            self.heading.set_meta(
+                f"进行中 {running} · 已完成 {done} · 失败 {failed}"
+                "　｜　运行日志记录解析与下载的关键节点")
         if self.summaryLabel.text() != text:
             self.summaryLabel.setText(text)
+        self.retryFailedBtn.setEnabled(failed > 0)
+        self.clearBtn.setEnabled(done + failed > 0)
+
+    def _on_filter_changed(self, index: int):
+        self._filter = index
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, COL_NAME)
+            tid = item.data(Qt.UserRole) if item is not None else None
+            info = next((t for t in self.ctx.manager.all_tasks()
+                         if t.task_id == tid), None)
+            if info is not None:
+                self._apply_row_filter(row, info)
+            else:
+                self.table.setRowHidden(row, index != 0)
+
+    def _apply_row_filter(self, row: int, info: DownloadTaskInfo):
+        """按当前分段筛选决定这一行是否显示（隐藏而不是删行，切换零成本）"""
+        statuses = _FILTERS[self._filter][1]
+        hidden = statuses is not None and info.status not in statuses
+        if self.table.isRowHidden(row) != hidden:
+            self.table.setRowHidden(row, hidden)
 
     def _open_download_dir(self):
         path = self.ctx.config.get("download_path")

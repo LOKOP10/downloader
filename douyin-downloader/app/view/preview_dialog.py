@@ -10,13 +10,15 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
-from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPushButton,
-                               QSlider, QStyle, QVBoxLayout)
+from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QSlider, QStyle,
+                               QVBoxLayout)
+from qfluentwidgets import FluentIcon as FIF, PrimaryPushButton, PushButton
 
 from ..core.domain import needs_cookie_for_url
 from ..core.downloader import headers_for
 from ..core.models import clean_cookie
 from ..core.workers import JmPreviewOpenWorker, JmPreviewPageWorker
+from . import design as D
 
 # 后台线程活到自然结束：窗口关掉时线程可能还在跑，跟着窗口一起析构会触发
 # 「QThread: Destroyed while thread is still running」并把进程带崩。
@@ -185,28 +187,52 @@ class PreviewDialog(QDialog):
         self._jm_chapters = 0
         self._jm_busy = False
         self.setWindowTitle("下载前预览")
-        self.resize(760, 640)
+        self.resize(780, 660)
+        self.setStyleSheet("QDialog{background:transparent;}")
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setSpacing(10)
         heading = QLabel(info.title or "（无标题）", self)
         heading.setWordWrap(True)
+        heading.setFont(D.font(D.FONT_TITLE, D.W_SEMI))
+        # 裸 QLabel 没有 setTextColor（那是 qfluentwidgets 的扩展），用样式设色
+        D.theme_qss(heading,
+                    f"QLabel{{color:{D.TEXT_PRIMARY[0]};background:transparent;}}",
+                    f"QLabel{{color:{D.TEXT_PRIMARY[1]};background:transparent;}}")
         layout.addWidget(heading)
         self.detail = QLabel(label or info.type_text, self)
+        self.detail.setFont(D.font(D.FONT_CAPTION))
+        D.theme_qss(self.detail,
+                    f"QLabel{{color:{D.TEXT_TERTIARY[0]};background:transparent;}}",
+                    f"QLabel{{color:{D.TEXT_TERTIARY[1]};background:transparent;}}")
         layout.addWidget(self.detail)
         self.stage = QLabel("加载中…", self)
         self.stage.setAlignment(Qt.AlignCenter)
         self.stage.setMinimumHeight(380)
-        self.stage.setStyleSheet("background: #181818; color: #eee; border-radius: 8px")
+        self.stage.setFont(D.font(D.FONT_CAPTION))
+        # 舞台用最深的一档底 + 1px 描边：视频/图片浮在上面，边界一眼可见
+        D.theme_qss(self.stage,
+                    "QLabel{background:#0B0B0D;color:#71717A;border:1px solid #27272A;"
+                    "border-radius:10px;}",
+                    "QLabel{background:#050506;color:#71717A;border:1px solid #27272A;"
+                    "border-radius:10px;}")
         layout.addWidget(self.stage, 1)
         self.controls = QHBoxLayout()
+        self.controls.setSpacing(8)
         layout.addLayout(self.controls)
         self.status = QLabel("", self)
         self.status.setWordWrap(True)
+        self.status.setFont(D.font(D.FONT_CAPTION))
+        D.theme_qss(self.status,
+                    f"QLabel{{color:{D.TEXT_TERTIARY[0]};background:transparent;}}",
+                    f"QLabel{{color:{D.TEXT_TERTIARY[1]};background:transparent;}}")
         layout.addWidget(self.status)
         actions = QHBoxLayout()
+        actions.setSpacing(8)
         actions.addStretch()
-        close = QPushButton("关闭", self)
+        close = PushButton("关闭", self)
         close.clicked.connect(self.reject)
-        download = QPushButton("下载当前作品", self)
+        download = PrimaryPushButton(FIF.DOWNLOAD, "下载当前作品", self)
         download.clicked.connect(self.accept)
         actions.addWidget(close)
         actions.addWidget(download)
@@ -215,8 +241,8 @@ class PreviewDialog(QDialog):
             if info.source == "jmcomic":
                 self._setup_jm(info, cover)
             else:
-                prev = QPushButton("上一张", self)
-                next_image = QPushButton("下一张", self)
+                prev = PushButton("上一张", self)
+                next_image = PushButton("下一张", self)
                 self.counter = QLabel("", self)
                 prev.clicked.connect(lambda: self._change_image(-1))
                 next_image.clicked.connect(lambda: self._change_image(1))
@@ -252,7 +278,7 @@ class PreviewDialog(QDialog):
                                                    self._audio_player.errorString()))
             self._player.errorOccurred.connect(
                 lambda *_: self.status.setText("视频预览失败：" + self._player.errorString()))
-            play = QPushButton("暂停", self)
+            play = PushButton("暂停", self)
             play.clicked.connect(lambda: self._toggle_play(play))
             self.seek = ClickableSlider(Qt.Horizontal, self)
             self.seek.setRange(0, 0)
@@ -344,8 +370,8 @@ class PreviewDialog(QDialog):
     def _setup_jm(self, info, cover):
         self.detail.setText("内容预览（内容页需联网逐页取回）")
         self.stage.setText("正在连接禁漫…")
-        self.prevButton = QPushButton("上一页", self)
-        self.nextButton = QPushButton("下一页", self)
+        self.prevButton = PushButton("上一页", self)
+        self.nextButton = PushButton("下一页", self)
         self.counter = QLabel("加载中…", self)
         self.prevButton.clicked.connect(lambda: self._jm_go(-1))
         self.nextButton.clicked.connect(lambda: self._jm_go(1))
