@@ -33,7 +33,7 @@ class MangaWindowIntegrationTest(unittest.TestCase):
             window = MainWindow(config)
             try:
                 window.show()
-                self.assertEqual(len(window._pages), 7)
+                self.assertEqual(len(window._pages), 8)
                 window._read_manga(str(folder))
                 shelf = window.mangaInterface
                 deadline = time.monotonic() + 6
