@@ -4,7 +4,12 @@ import android.content.Context
 import com.xd.vdl.core.download.Downloader
 import com.xd.vdl.core.download.JmDownloader
 import com.xd.vdl.core.download.MediaStoreExporter
+import com.xd.vdl.core.download.JmReconcile
 import com.xd.vdl.core.download.Muxer
+import com.xd.vdl.core.manga.MangaChapter
+import com.xd.vdl.core.manga.MangaFiles
+import com.xd.vdl.core.manga.MangaIntake
+import com.xd.vdl.core.manga.MangaLibrary
 import com.xd.vdl.core.parse.JmParser
 import com.xd.vdl.core.model.Quality
 import com.xd.vdl.core.model.VideoInfo
@@ -47,7 +52,6 @@ object DownloadManager {
             else -> quality.label
         }
         _tasks.update { it + DownloadTask(id, info.title, info.platform, label) }
-        DownloadService.start(ctx)
         AppLog.i(
             "入队 $id ${info.platform.label}「${info.title}」| $label | " +
                 "视频候选=${if (info.isImage) 0 else quality.videoCandidates.size} | " +
@@ -62,8 +66,13 @@ object DownloadManager {
         jobs[id] = job
         job.invokeOnCompletion {
             jobs.remove(id)
+            // 只有确认没有任何在跑/待跑任务时才停服务。
+            // 注意顺序：**先登记本任务、再启动服务**。原来的顺序是先 start 服务，
+            // 再登记 job，中间这段窗口里旧任务的收尾会看到 jobs 为空并 stop()，
+            // 把刚入队新任务的前台保护撤掉（进程可能被系统回收）。
             if (jobs.isEmpty()) DownloadService.stop(ctx)
         }
+        DownloadService.start(ctx)
         job.start()
         refreshNotification(force = true)
     }
@@ -95,6 +104,16 @@ object DownloadManager {
     ) {
         setStatus(id, TaskStatus.RUNNING)
         val t0 = System.currentTimeMillis()
+        // 低版本没给存储权限时，导出必然失败；与其下载完整段再失败，
+        // 不如在开始前就明确告知（B-08）。
+        if (!MediaStoreExporter.canWritePublicStorage(ctx)) {
+            setStatus(
+                id, TaskStatus.FAILED,
+                "缺少存储权限，无法保存到相册 / 下载目录。请在系统设置里允许本应用访问存储后重试",
+            )
+            AppLog.e("下载未开始 $id：缺少 WRITE_EXTERNAL_STORAGE 权限")
+            return
+        }
         val root = ctx.getExternalFilesDir(null) ?: ctx.filesDir
         val work = File(root, "downloads/$id").apply { mkdirs() }
         try {
@@ -158,9 +177,52 @@ object DownloadManager {
             )
             AppLog.i("DASH 两轨完成 $id：视频 ${vf.length()} + 音频 ${af.length()}，开始合并")
             setStatus(id, TaskStatus.MERGING)
-            Muxer.merge(vf, af, out)
+            try {
+                Muxer.merge(vf, af, out)
+            } catch (e: CancellationException) {
+                // 半成品不能留在 work 里被当作成功产物。
+                out.delete()
+                throw e
+            }
             vf.delete()
             af.delete()
+        } else if (quality.segmentUrls.size > 1) {
+            // B 站 durl 分段：同一路视频被切成多段，必须按顺序拼成一个文件。
+            // 原来每段被当成独立档位，用户只能拿到第一段（其余静默丢失）。
+            val segments = quality.segmentUrls
+            var written = 0L
+            val totalSize = quality.sizeBytes
+            segments.forEachIndexed { index, url ->
+                val part = File(work, "seg%03d.mp4".format(index))
+                val candidates = listOf(url) + quality.segmentBackups.getOrElse(index) { emptyList() }
+                Downloader.downloadFirst(
+                    candidates, info.platform, part,
+                    onProgress = { d, _ ->
+                        update(id) {
+                            it.copy(
+                                downloaded = written + d,
+                                total = if (totalSize > 0) totalSize else 0,
+                            )
+                        }
+                    },
+                    onTry = { i, n, u ->
+                        AppLog.i("分段 $id ${index + 1}/${segments.size} 地址 $i/$n ${Downloader.hostOf(u)}")
+                    },
+                    onFail = { i, n, u, err ->
+                        AppLog.w("分段 $id ${index + 1}/${segments.size} 地址 $i/$n 失败 ${Downloader.hostOf(u)}：$err")
+                    },
+                )
+                written += part.length()
+            }
+            setStatus(id, TaskStatus.MERGING)
+            // 分段是同一个 mp4 的片段，直接按顺序首尾相接即可（无需重新编码）。
+            out.outputStream().buffered().use { sink ->
+                segments.indices.forEach { index ->
+                    File(work, "seg%03d.mp4".format(index)).inputStream().use { it.copyTo(sink) }
+                }
+            }
+            segments.indices.forEach { File(work, "seg%03d.mp4".format(it)).delete() }
+            AppLog.i("分段拼接完成 $id：${segments.size} 段 → ${out.length()} 字节")
         } else {
             Downloader.downloadFirst(
                 quality.videoCandidates, info.platform, out,
@@ -202,13 +264,46 @@ object DownloadManager {
                 }
                 val uri = MediaStoreExporter.exportDownload(ctx, named, "application/zip")
                 if (uri == null) throw IOException("压缩包写入下载目录失败")
+                // 页数对账：解析时界面写的是 total_photos（多章为**各章合计**），
+                // 若实际张数少了，必须明说，不能让用户翻到最后一页才发现（实测 350234）。
+                val shortNote = JmReconcile.describe(info.jmPageCount, count)
+                if (shortNote.isNotEmpty()) {
+                    AppLog.w("禁漫《" + info.title + "》" + shortNote)
+                }
                 // 记下 URI，卡片才可点（否则 canPreview 恒 false，界面像没反应）
                 update(id) {
                     it.copy(
                         savedUri = uri.toString(),
-                        note = "已保存 $count 张 → ${named.name}",
+                        note = "已保存 $count 张 → ${named.name}" +
+                            if (shortNote.isEmpty()) "" else "｜" + shortNote,
                     )
                 }
+                // 入库：这一步让「下载完的漫画」在重启之后依然找得到。
+                // 放在导出成功之后 —— 只有文件真的落到下载目录才算数；
+                // 失败也不改变任务状态（文件已在，用户可以手动重试入库）。
+                runCatching {
+                    val meta = MangaFiles.meta(ctx, uri.toString())
+                    // 目录名以 MediaStore 实际值优先：用户可能改过下载位置。
+                    // 若这里用固定默认名，key 就与「扫描下载目录」（按真实目录算 key）
+                    // 对不上，同一本书会在书架里出现两条记录。
+                    val dirName = meta.dirName.ifEmpty { SaveSettings.archiveDir(ctx) }
+                    MangaLibrary.add(
+                        MangaIntake.zip(
+                            title = info.title,
+                            platform = info.platform,
+                            uri = uri.toString(),
+                            dirName = dirName,
+                            fileName = named.name,
+                            sourceUrl = MangaIntake.jmSourceUrl(info.jmId, info.jmKind),
+                            // 多章本子先记下章名；每章页数要解包才准，留给阅读器补齐
+                            chapters = if (info.jmChapters.size > 1) {
+                                info.jmChapters.map { MangaChapter(it.second, 0) }
+                            } else {
+                                emptyList()
+                            },
+                        ),
+                    )
+                }.onFailure { AppLog.w("下载完成但入库失败：" + it.message) }
             },
         )
     }
@@ -268,6 +363,18 @@ object DownloadManager {
         }
         // 全部 URI 交给任务，预览时可横滑翻页
         update(id) { it.copy(savedUris = saved, note = "已保存 ${saved.size} 张") }
+        // 入库：整份图集作为一本「散图漫画」，顺序就是解析结果给的顺序。
+        // 只有一张图时不入库（MangaIntake.images 返回 null）—— 单张图在相册里看更合适。
+        runCatching {
+            val book = MangaIntake.images(
+                title = info.title,
+                platform = info.platform,
+                uris = saved,
+                businessId = info.jmId.ifEmpty { info.author },
+                sourceUrl = info.platform.referer,
+            )
+            if (book != null) MangaLibrary.add(book)
+        }.onFailure { AppLog.w("图集下载完成但入库失败：" + it.message) }
     }
 
     private fun refreshNotification(force: Boolean = false) {

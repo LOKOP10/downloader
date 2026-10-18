@@ -3,7 +3,7 @@
 ; 产物：dist\视频下载器-<version>-setup.exe
 
 #define MyAppName "视频下载器"
-#define MyAppVersion "1.8.10.37"
+#define MyAppVersion "1.8.10.43"
 #define MyAppPublisher "个人项目"
 #define MyAppExeName "视频下载器.exe"
 ; 测试安装可用编译参数指定独立AppId，避免碰用户现有安装/卸载注册信息。
@@ -18,9 +18,9 @@ AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppCopyright=仅供个人学习与备份使用
-VersionInfoVersion=1.8.10.37
+VersionInfoVersion=1.8.10.43
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=1.8.10.37
+VersionInfoProductVersion=1.8.10.43
 VersionInfoDescription={#MyAppName} 安装程序
 VersionInfoCopyright=仅供个人学习与备份使用
 DefaultDirName={localappdata}\Programs\{#MyAppName}
@@ -65,7 +65,12 @@ Name: "compact"; Description: "精简安装（不含 ffmpeg，可稍后在设置
 Name: "custom"; Description: "自定义"; Flags: iscustom
 
 [Files]
+; 两种构建形态都由 build_exe.spec 产出（默认单文件；设 VDL_BUILD_MODE=onedir
+; 得到文件夹版）。文件夹版的 EXE 必须与同目录 _internal 一起部署，只装 EXE
+; 会启动失败；单文件版没有该目录。这里两种都兼容：有 _internal 就一并安装，
+; 没有就跳过，换形态时不必再改安装脚本。
 Source: "..\dist\{#MyAppVersion}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion; Components: main
+Source: "..\dist\{#MyAppVersion}\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Components: main
 Source: "..\dist\tools\ffmpeg.exe"; DestDir: "{app}\tools"; Flags: ignoreversion skipifsourcedoesntexist; Components: ffmpeg
 
 [Icons]
