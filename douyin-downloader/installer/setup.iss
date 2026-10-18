@@ -87,6 +87,10 @@ Type: filesandordirs; Name: "{app}\tools"
 ; 运行日志是程序自己建的（{app}\logs），不删掉的话卸载后会留下空目录
 Type: filesandordirs; Name: "{app}\logs"
 
+; 运行期临时目录同理：app/core/runtime_temp.py 会在程序目录下建 .runtime-temp，
+; 它不是安装时写入的文件，卸载程序不会自动清，不删同样会留下空目录。
+Type: filesandordirs; Name: "{app}\.runtime-temp"
+
 [Code]
 function EdgeExists(): Boolean;
 begin
