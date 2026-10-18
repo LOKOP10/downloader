@@ -315,8 +315,21 @@ class DouyinParser:
             info.is_image = True
             for img in images:
                 urls = (img.get("url_list") or [])
-                if urls:
-                    info.image_urls.append(urls[-1] if len(urls) > 1 else urls[0])
+                if not urls:
+                    continue
+                info.image_urls.append(urls[-1] if len(urls) > 1 else urls[0])
+                # 图文里的 Live Photo：静图在 url_list，动图视频轨在 video.play_addr。
+                # 静态图的 video 字段可能为空，只有能拿到 play_addr 才算动图。
+                live_group = []
+                video_node = img.get("video")
+                if isinstance(video_node, dict):
+                    play_addr = video_node.get("play_addr") or {}
+                    for u in play_addr.get("url_list") or []:
+                        if not u:
+                            continue
+                        # 与视频分支一致：playwm 是带水印地址，换成 play 取无水印版
+                        live_group.append(u.replace("playwm", "play"))
+                info.image_live_url_groups.append(live_group)
             covers = (video.get("cover") or {}).get("url_list") or []
             info.cover_url = covers[0] if covers else (info.image_urls[0] if info.image_urls else "")
         else:

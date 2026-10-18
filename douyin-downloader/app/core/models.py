@@ -38,6 +38,9 @@ class VideoInfo:
     create_time: int = 0
     is_image: bool = False        # 是否为图文/图集
     image_urls: List[str] = field(default_factory=list)
+    # 与 image_urls 一一对应：每张图的「动图视频轨」候选地址；静态图为空列表。
+    # 抖音图文里的 Live Photo 在 images[i].video.play_addr 下，只有图集解析会填。
+    image_live_url_groups: List[List[str]] = field(default_factory=list)
     music_title: str = ""
     extra: Dict[str, str] = field(default_factory=dict)  # jmcomic chapters/pages
 
@@ -126,6 +129,8 @@ class DownloadTaskInfo:
     status: str = "等待中"        # 等待中/下载中/已完成/失败/已取消
     error: str = ""
     cover_url: str = ""           # 解析出的封面地址（本地视频库自动入库取封面用，可空）
+    convert_to_gif: bool = False  # 下载完成后把视频轨转成 GIF（抖音图文动图）
+    gif_path: str = ""            # 转换后的 GIF 目标路径（convert_to_gif 时使用）
 
     @property
     def percent(self) -> int:

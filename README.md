@@ -8,7 +8,7 @@
 
 | 站点 | 说明 |
 |---|---|
-| 抖音 | 去水印、作者主页批量 |
+| 抖音 | 去水印、作者主页批量、图文动图转 GIF |
 | B 站 | DASH 音视频自动合并 |
 | 小红书 | 需用 App 分享的链接（含 `xsec_token`） |
 | X (Twitter) | 敏感内容推文需填 `auth_token` / `ct0` |
@@ -125,7 +125,7 @@ cd douyin-downloader
 python -m pytest tests -q
 ```
 
-当前全量 206 项（含 32 项子测试）。MP4 转 GIF / WebP 转换测试会调用本机
+当前全量 213 项（含 32 项子测试）。MP4 转 GIF / WebP 转换测试会调用本机
 ffmpeg；打包目录可把 `dist/tools` 加入 PATH。
 
 ### 使用
@@ -186,6 +186,18 @@ cd douyin-downloader
 python -m unittest discover -s tests -p "test_mp4_to_gif.py" -v
 python -m unittest discover -s tests -p "test_gif_interface.py" -v
 ```
+
+### 抖音图文动图（Windows）
+
+- 解析抖音图文作品时，若某张图带 Live Photo 视频轨（`images[].video.play_addr`），
+  该图会作为动图任务下载视频轨，完成后自动转成同名 GIF（默认 15fps、480 宽、
+  256 色、Bayer 抖动、无限循环）。
+- 普通静态图仍按原逻辑保存为 JPG/WebP；动图与静态图混排时各自独立，某项失败
+  不影响其余项。
+- 动图任务在「下载任务」里先显示下载进度，随后进入「转换中」；转换失败保留
+  已下载的 MP4，并在任务错误里显示原因。
+- 识别依赖抖音接口返回的视频轨；若登录态/风控导致只下发静态图，则按普通
+  图集下载，不会生成 GIF。
 
 ### 漫画阅读器（Windows）
 
