@@ -43,7 +43,10 @@
 │   │   │   ├── jmcomic_bridge.py  # 禁漫图片解码
 │   │   │   └── xhsapi/         # 小红书签名直连（vendor，见该目录 __init__ 的许可说明）
 │   │   ├── view/               # 界面（qfluentwidgets）
-│   │   └── main_window.py
+│   │   │   ├── design.py       # 设计 token：颜色 / 间距 / 字阶 / 动效
+│   │   │   ├── workspace.py    # 壳层组件：侧栏导航、面板、状态条、设置行、分段控件
+│   │   │   └── *_interface.py  # 六个页面（解析 / 批量 / 任务 / 书架 / 转换 / 设置）
+│   │   └── main_window.py      # 窗口壳层：标题栏 + 侧栏 + 内容画布 + 状态条
 │   ├── assets/                 # 图标资源
 │   ├── installer/              # Inno Setup 安装包脚本
 │   ├── reference/              # 第三方参考实现，不参与构建（见其 README）
@@ -107,6 +110,9 @@ python -m PyInstaller --noconfirm --distpath dist/portable-build build_exe.spec
 文件夹版的 EXE 必须与 `_internal/` 一起保留，不能只复制 EXE。程序运行期临时文件使用自身目录的 `.runtime-temp/`，只改变本进程及其子进程环境，不修改Windows用户环境变量。
 
 ### 使用
+
+界面是「左侧导航 + 内容画布」的单窗口工作台：视频解析、批量下载、下载任务、
+漫画阅读器、WebP 转 MP4、设置六页，底部状态条常驻显示后台任务数、保存目录与版本。
 
 1. 粘链接，程序识别站点并解析，选画质，下载。
 2. 下载完成后可自动复制文件到剪贴板（配置项 `auto_copy_file`）。

@@ -1,24 +1,29 @@
 # -*- coding: utf-8 -*-
-"""账号卡：一个平台一张卡，把「网页登录 / 填 Cookie」两个入口收进同一行。
+"""账号行：一个平台一行，把「网页登录 / 填 Cookie」两个入口收进同一行。
 
 改动背景：设置页原先把 6 个平台的登录与 Cookie 摊成 11 张结构完全相同的卡片，
-找「小红书 Cookie」要扫 11 行 —— 这是整页认知负载最高的地方（见 .impeccable.md
-的设计原则 2：同构即噪声）。现在按平台聚合，一张卡 = 一个平台 = 一行。
+找「小红书 Cookie」要扫 11 行 —— 这是整页认知负载最高的地方（设计原则：同构即噪声）。
+现在按平台聚合，一个平台一行。
 
 登录态有三种真实状态，都要能表达，否则会出现「左边登录成功、右边显示未配置」
 的自相矛盾：
   - 未配置      既没有持久化登录态，也没有手填 Cookie
   - 已登录      浏览器 profile 里有登录态（网页登录过）
   - 已填 Cookie 配置里存了 Cookie 字符串（手填或登录时自动导出）
+
+视觉上不再用 `SettingCard` 的卡片外壳（放进面板里会套娃），改为
+`workspace.SettingRow`：左侧平台名 + 说明，右侧「状态徽章 + 两个入口」。
 """
 import os
 import sqlite3
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QHBoxLayout, QWidget
 
-from qfluentwidgets import CaptionLabel, PushButton, SettingCard
+from qfluentwidgets import PushButton
 
 from . import design as D
+from . import workspace as W
 
 STATE_NONE = "none"
 STATE_LOGIN = "login"
@@ -64,35 +69,51 @@ def profile_logged_in(profile_dir: str, cookie_name: str = "") -> bool:
     return False
 
 
-class AccountCard(SettingCard):
-    """一个平台的账号入口：左侧平台名 + 说明，右侧登录态 + 两个入口按钮"""
+class AccountRow(QWidget):
+    """一个平台的账号入口：左侧平台名 + 说明，右侧状态徽章 + 两个入口按钮"""
 
     loginRequested = Signal()
     cookieRequested = Signal()
 
     def __init__(self, icon, name: str, desc: str, parent=None):
-        super().__init__(icon, name, desc, parent)
+        super().__init__(parent)
         self._descText = desc
         self._busy = False
+        self.setMinimumHeight(D.ROW_H)
 
-        # 登录态：小写字 + 状态色，放在按钮左边，扫一眼就知道这个平台要不要配置
-        self.stateLabel = CaptionLabel("未配置", self)
-        self.stateLabel.setFont(D.font(D.FONT_CAPTION, D.W_MEDIUM))
-        self.hBoxLayout.addWidget(self.stateLabel, 0,
-                                  Qt.AlignmentFlag.AlignVCenter)
-        self.hBoxLayout.addSpacing(D.GAP_LG)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 8, 0, 8)
+        row.setSpacing(D.GAP_MD)
+
+        self.iconWidget = W.IconBadge(icon, self, 28, 14)
+        row.addWidget(self.iconWidget, 0, Qt.AlignmentFlag.AlignTop)
+
+        text = QWidget(self)
+        col = W.QVBoxLayout(text)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(2)
+        self.titleLabel = W.text_label(name, text, D.TEXT_PRIMARY, D.FONT_BODY)
+        col.addWidget(self.titleLabel)
+        self.descLabel = W.text_label(desc, text, D.TEXT_TERTIARY,
+                                      D.FONT_CAPTION, wrap=True)
+        col.addWidget(self.descLabel)
+        row.addWidget(text, 1)
+
+        # 登录态：徽章形态，扫一眼就知道这个平台要不要配置
+        self.stateLabel = W.Chip("未配置", D.TEXT_TERTIARY, self)
+        self.stateLabel.setMinimumWidth(64)
+        row.addWidget(self.stateLabel, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.loginBtn = PushButton("网页登录", self)
         self.loginBtn.setToolTip(
             "打开浏览器登录，登录态本地保存 —— 无需手动提取 Cookie（推荐）")
         self.loginBtn.clicked.connect(self.loginRequested)
-        self.hBoxLayout.addWidget(self.loginBtn)
-        self.hBoxLayout.addSpacing(D.GAP_SM)
+        row.addWidget(self.loginBtn)
 
         self.cookieBtn = PushButton("填 Cookie", self)
         self.cookieBtn.setToolTip("手动填写该平台的 Cookie 字段")
         self.cookieBtn.clicked.connect(self.cookieRequested)
-        self.hBoxLayout.addWidget(self.cookieBtn)
+        row.addWidget(self.cookieBtn)
 
         self.set_state(STATE_NONE)
 
@@ -108,16 +129,35 @@ class AccountCard(SettingCard):
         else:
             text, color = "未配置", D.TEXT_TERTIARY
             tip = "尚未配置：免登录的站点可以直接用，受限内容需要先登录或填 Cookie"
-        self.stateLabel.setText(f"● {text}")
-        self.stateLabel.setTextColor(*color)
+        self.stateLabel.setText(text)
+        self.stateLabel.set_color(color)
         self.stateLabel.setToolTip(f"{tip}\n{note}" if note else tip)
 
     def set_busy(self, busy: bool) -> None:
-        """登录过程中禁用本卡入口，避免并发开多个浏览器窗口"""
+        """登录过程中禁用本行入口，避免并发开多个浏览器窗口"""
         self._busy = bool(busy)
         self.loginBtn.setEnabled(not busy)
         self.cookieBtn.setEnabled(not busy)
-        self.setContent("正在等待浏览器登录 …" if busy else self._descText)
+        if busy:
+            self.set_state(STATE_NONE)
+            self.stateLabel.setText("登录中…")
+        else:
+            self.descLabel.setText(self._descText)
+
+    def set_content(self, text: str) -> None:
+        """兼容旧接口：改说明文字"""
+        self.descLabel.setText(text)
 
     def is_busy(self) -> bool:
         return self._busy
+
+    def paintEvent(self, event):
+        from PySide6.QtGui import QPainter, QPen
+        painter = QPainter(self)
+        painter.setPen(QPen(W.col(D.HAIRLINE_SOFT), 1))
+        y = self.rect().bottom()
+        painter.drawLine(self.rect().left(), y, self.rect().right(), y)
+
+
+# 兼容旧名：设置页历史上按 AccountCard 引用
+AccountCard = AccountRow

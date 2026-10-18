@@ -1,4 +1,8 @@
-"""原生、本地 WebP 转换页面；工作线程不持有任何 QWidget。"""
+"""原生、本地 WebP 转换页面；工作线程不持有任何 QWidget。
+
+布局：左右两栏（输入队列 / 转换设置）+ 底部结果区 —— 参数与结果同屏可见，
+不用在一条长列表里上下翻。
+"""
 import os
 from pathlib import Path
 import threading
@@ -7,13 +11,16 @@ from PySide6.QtCore import QObject, Qt, QUrl, Signal, Slot, QEvent
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QColorDialog, QFileDialog,
                                QFormLayout, QHBoxLayout, QListWidget,
-                               QListWidgetItem, QProgressBar, QWidget)
-from qfluentwidgets import (CheckBox, ComboBox, LineEdit, PrimaryPushButton,
-                            PushButton, ScrollArea, ListWidget)
+                               QListWidgetItem, QProgressBar, QSizePolicy,
+                               QWidget)
+from qfluentwidgets import (CheckBox, ComboBox, FluentIcon as FIF, LineEdit,
+                            ListWidget, PrimaryPushButton, PushButton, ScrollArea,
+                            TransparentToolButton)
 
 from ..core.ffmpeg import ffmpeg_path
 from ..core.webp_converter import ConversionCancelled, ConversionError, convert, merge_webps
 from . import design as D
+from . import workspace as W
 
 
 class _Signals(QObject):
@@ -73,84 +80,157 @@ class ConverterInterface(ScrollArea):
         self.content = QWidget(self)
         self.content.setObjectName("converterContent")
         self.setWidget(self.content)
-        D.theme_qss(self.content, "QWidget#converterContent{background:transparent;}", "QWidget#converterContent{background:transparent;}")
-        layout = D.page_layout(self.content)
-        layout.addWidget(D.PageHeader("WebP 转 MP4", "本地处理 · 单个 / 批量转换 · 按顺序合并 · 无需浏览器", self))
-        card, box = D.card(self)
-        layout.addWidget(card, 1)
-        self.editPanel = QWidget(self)
-        from PySide6.QtWidgets import QVBoxLayout
-        edit = QVBoxLayout(self.editPanel)
-        edit.setContentsMargins(0, 0, 0, 0)
-        edit.setSpacing(D.GAP_MD)
-        box.addWidget(self.editPanel)
+        D.theme_qss(self.content, "QWidget#converterContent{background:transparent;}",
+                    "QWidget#converterContent{background:transparent;}")
+        layout = W.page_body(self.content, pad=24, spacing=12)
+        layout.addWidget(W.PageHeading(
+            "WebP 转 MP4",
+            "本地完成，不联网、不上传：动图逐帧转 MP4，或按列表顺序合并成一个视频。",
+            self.content))
+
+        columns = QHBoxLayout()
+        columns.setSpacing(12)
+
+        # ---------------- 左：输入队列 ----------------
+        left = W.Panel(self.content, padding=(16, 12, 16, 12), spacing=10)
+        leftHead = W.PanelTitle("输入队列", left, note="按列表顺序合并")
+        left.body.addWidget(leftHead)
         toolbar = QHBoxLayout()
-        self.addBtn = PrimaryPushButton("添加 WebP", self)
-        self.upBtn = PushButton("上移", self)
-        self.downBtn = PushButton("下移", self)
-        self.removeBtn = PushButton("删除", self)
-        self.clearBtn = PushButton("清空", self)
-        for button in (self.addBtn, self.upBtn, self.downBtn, self.removeBtn, self.clearBtn):
+        toolbar.setSpacing(D.GAP_XS)
+        self.addBtn = PrimaryPushButton(FIF.ADD, "添加 WebP", left)
+        self.addBtn.setToolTip("选择 WebP 文件（支持多选）")
+        # 列表内操作用图标按钮：它们只作用于选中项，用文字会跟「添加」抢主次。
+        # 图标按钮必须显式给边长，否则放进 QHBoxLayout 会被拉成大方块。
+        self.upBtn = TransparentToolButton(FIF.UP, left)
+        self.upBtn.setToolTip("上移选中项（决定合并顺序）")
+        self.downBtn = TransparentToolButton(FIF.DOWN, left)
+        self.downBtn.setToolTip("下移选中项")
+        self.removeBtn = TransparentToolButton(FIF.DELETE, left)
+        self.removeBtn.setToolTip("移除选中项（不删除源文件）")
+        self.clearBtn = TransparentToolButton(FIF.BROOM, left)
+        self.clearBtn.setToolTip("清空列表（不删除源文件）")
+        toolbar.addWidget(self.addBtn)
+        toolbar.addSpacing(D.GAP_SM)
+        for button in (self.upBtn, self.downBtn, self.removeBtn, self.clearBtn):
+            button.setFixedSize(32, 32)
             toolbar.addWidget(button)
-        toolbar.addStretch()
-        edit.addLayout(toolbar)
-        self.inputList = ListWidget(self)
+        toolbar.addStretch(1)
+        left.body.addLayout(toolbar)
+
+        self.inputList = ListWidget(left)
         self.inputList.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.inputList.setFixedHeight(110)
+        self.inputList.setMinimumHeight(180)
         self.inputList.setAcceptDrops(False)
-        edit.addWidget(self.inputList)
-        edit.addWidget(D.hint_label("多选或拖入 WebP；合并播放顺序以上方列表为准。同名输出默认报错，不会静默覆盖。", self))
+        left.body.addWidget(self.inputList, 1)
+        left.body.addWidget(W.text_label(
+            "多选或拖入；合并播放顺序以上方列表为准。同名输出默认报错，不会静默覆盖。",
+            left, D.TEXT_TERTIARY, D.FONT_CAPTION, wrap=True))
+        columns.addWidget(left, 1)
+
+        # ---------------- 右：转换设置 ----------------
+        right = W.Panel(self.content, padding=(16, 12, 16, 12), spacing=10)
+        self.editPanel = right
+        right.body.addWidget(W.PanelTitle("转换设置", right))
+
         form = QFormLayout()
-        self.modeCombo = ComboBox(self)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(D.GAP_MD)
+        form.setVerticalSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        self.modeCombo = ComboBox(right)
         self.modeCombo.addItems(["逐个转换（单个 / 批量）", "按列表顺序合并为一个 MP4"])
-        self.crfCombo = ComboBox(self)
-        self.crfCombo.addItems(["CRF 12 · 高保真（有损）", "CRF 18 · 推荐", "CRF 23 · 较小文件"])
+        self.crfCombo = ComboBox(right)
+        self.crfCombo.addItems(["CRF 12 · 高保真（有损）", "CRF 18 · 推荐",
+                                "CRF 23 · 较小文件"])
         self.crfCombo.setCurrentIndex(1)
-        self.backgroundBtn = PushButton("背景色：#ffffff", self)
-        self.outputEdit = LineEdit(self)
-        self.outputEdit.setText(str(Path(ctx.config.get("download_path")) / "converted"))
-        self.outputBtn = PushButton("选择目录", self)
+        self.backgroundBtn = PushButton("背景色 #ffffff", right)
+        self.backgroundBtn.setToolTip("WebP 的透明区域会被合成到这个不透明背景色上")
+
         output = QHBoxLayout()
+        output.setSpacing(D.GAP_XS)
+        self.outputEdit = LineEdit(right)
+        self.outputEdit.setText(str(Path(ctx.config.get("download_path")) / "converted"))
+        self.outputBtn = PushButton("选择", right)
+        self.outputBtn.setToolTip("选择转换结果的输出目录")
         output.addWidget(self.outputEdit, 1)
         output.addWidget(self.outputBtn)
-        self.mergeNameEdit = LineEdit(self)
+
+        self.mergeNameEdit = LineEdit(right)
         self.mergeNameEdit.setText("merged.mp4")
         self.mergeNameEdit.setEnabled(False)
-        self.overwriteCheck = CheckBox("显式允许覆盖已有 MP4", self)
+        self.mergeNameEdit.setToolTip("合并模式下的输出文件名（必须是 .mp4）")
+        self.overwriteCheck = CheckBox("允许覆盖同名 MP4", right)
         self.overwriteCheck.setChecked(False)
-        form.addRow(D.caption("转换方式", self), self.modeCombo)
-        form.addRow(D.caption("画质", self), self.crfCombo)
-        form.addRow(D.caption("不透明 RGB 背景", self), self.backgroundBtn)
-        form.addRow(D.caption("输出目录", self), output)
-        form.addRow(D.caption("合并文件名", self), self.mergeNameEdit)
-        form.addRow(D.caption("覆盖策略", self), self.overwriteCheck)
-        edit.addLayout(form)
+        self.overwriteCheck.setToolTip(
+            "默认不覆盖：同名输出会报错。勾选后才允许替换已有文件")
+
+        form.addRow(W.text_label("转换方式", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
+                    self.modeCombo)
+        form.addRow(W.text_label("画质", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
+                    self.crfCombo)
+        form.addRow(W.text_label("透明区背景", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
+                    self.backgroundBtn)
+        form.addRow(W.text_label("输出目录", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
+                    output)
+        form.addRow(W.text_label("合并文件名", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
+                    self.mergeNameEdit)
+        form.addRow(W.text_label("覆盖策略", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
+                    self.overwriteCheck)
+        right.body.addLayout(form)
+        right.body.addStretch(1)
+        right.body.addWidget(W.text_label(
+            "复用设置里的 ffmpeg 组件；缺失时请先到「设置 → 合并组件」下载。",
+            right, D.TEXT_TERTIARY, D.FONT_CAPTION, wrap=True))
+        columns.addWidget(right, 1)
+        # 左右两栏吃掉剩余高度（两栏里的列表都是 stretch=1），
+        # 结果区按内容高度贴在下面
+        layout.addLayout(columns, 10)
+
+        # ---------------- 结果区 ----------------
+        result = W.Panel(self.content, padding=(16, 12, 16, 12), spacing=8)
+        result.setSizePolicy(QSizePolicy.Policy.Preferred,
+                             QSizePolicy.Policy.Maximum)
         actions = QHBoxLayout()
-        self.startBtn = PrimaryPushButton("开始转换", self)
-        self.cancelBtn = PushButton("取消", self)
+        actions.setSpacing(D.GAP_SM)
+        self.startBtn = PrimaryPushButton(FIF.PLAY, "开始转换", result)
+        self.cancelBtn = PushButton(FIF.CLOSE, "取消", result)
         self.cancelBtn.setEnabled(False)
-        self.openBtn = PushButton("打开输出目录", self)
-        self.previewBtn = PushButton("预览选中视频", self)
+        self.openBtn = PushButton(FIF.FOLDER, "打开输出目录", result)
+        self.previewBtn = PushButton(FIF.VIEW, "预览结果", result)
         self.previewBtn.setEnabled(False)
-        for button in (self.startBtn, self.cancelBtn, self.openBtn, self.previewBtn):
+        for button in (self.startBtn, self.cancelBtn, self.openBtn,
+                       self.previewBtn):
             actions.addWidget(button)
-        actions.addStretch()
-        box.addLayout(actions)
-        self.statusLabel = D.hint_label("等待添加 WebP", self)
-        self.statusLabel.setWordWrap(True)
-        box.addWidget(self.statusLabel)
-        self.progressBar = QProgressBar(self)
+        actions.addStretch(1)
+        result.body.addLayout(actions)
+
+        self.statusLabel = W.text_label("等待添加 WebP", result, D.TEXT_SECONDARY,
+                                        D.FONT_CAPTION, wrap=True)
+        result.body.addWidget(self.statusLabel)
+        self.progressBar = QProgressBar(result)
         self.progressBar.setTextVisible(False)
-        self.progressBar.setFixedHeight(6)
+        self.progressBar.setFixedHeight(4)
         D.theme_qss(self.progressBar,
-                    "QProgressBar{border:0;border-radius:3px;background:#e5e7eb;}QProgressBar::chunk{background:#009faa;border-radius:3px;}",
-                    "QProgressBar{border:0;border-radius:3px;background:#303036;}QProgressBar::chunk{background:#009faa;border-radius:3px;}")
+                    "QProgressBar{border:0;border-radius:2px;background:#E4E4E7;}"
+                    "QProgressBar::chunk{background:#009faa;border-radius:2px;}",
+                    "QProgressBar{border:0;border-radius:2px;background:#27272A;}"
+                    "QProgressBar::chunk{background:#009faa;border-radius:2px;}")
         self.progressBar.setRange(0, 1)
         self.progressBar.setValue(0)
-        box.addWidget(self.progressBar)
-        self.resultList = ListWidget(self)
-        self.resultList.setFixedHeight(100)
-        box.addWidget(self.resultList, 1)
+        result.body.addWidget(self.progressBar)
+
+        # 结果列表：没有结果时整块收起（空列表占着 160px 只会让页面像没做完）
+        self.resultList = ListWidget(result)
+        self.resultList.setFixedHeight(140)
+        self.resultList.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                      QSizePolicy.Policy.Fixed)
+        self.resultList.hide()
+        result.body.addWidget(self.resultList)
+        layout.addWidget(result, 0)
+        layout.addStretch(1)
+        self.statusText = self.statusLabel
+
         self.addBtn.clicked.connect(self._choose_files)
         self.upBtn.clicked.connect(lambda: self.move_selected(-1))
         self.downBtn.clicked.connect(lambda: self.move_selected(1))
@@ -285,6 +365,7 @@ class ConverterInterface(ScrollArea):
         tasks = ([(sources, output / name)] if merge else
                  [([source], output / (Path(source).stem + ".mp4")) for source in sources])
         self.resultList.clear()
+        self.resultList.show()
         for inputs, destination in tasks:
             item = QListWidgetItem(f"等待 · {destination.name}")
             item.setToolTip("\n".join(inputs))

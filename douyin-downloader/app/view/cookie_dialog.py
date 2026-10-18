@@ -32,7 +32,9 @@ class CookieDialog(MessageBox):
             self._edits[name] = edit
 
         tip = BodyLabel("保存时会自动拼接为标准 Cookie 格式，无需手动加分号和等号", self)
-        tip.setTextColor("#909090", "#a0a0a0")
+        # 提示文字走设计系统的三级色，不写死灰值（浅色主题下才有对比度）
+        from . import design as D
+        tip.setTextColor(*D.TEXT_TERTIARY)
         self.textLayout.addWidget(tip)
 
         self.yesButton.setText("保存")

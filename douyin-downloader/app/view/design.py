@@ -75,7 +75,18 @@ W_SEMI = QFont.Weight.DemiBold
 
 
 def font(size: int = FONT_BODY, weight=W_REGULAR) -> QFont:
-    """按设计系统取字体（字体族跟随 qfluentwidgets 的全局设置）"""
+    """按设计系统取字体（字体族跟随 qfluentwidgets 的全局设置）
+
+    兜底：允许传 CSS 风格的整数权重（400/600/700）。QFont.setWeight 只收
+    QFont.Weight 枚举，传 int 会直接抛 TypeError —— 这里统一转一次，
+    免得每个调用点都要记得用枚举。
+    """
+    if isinstance(weight, int) and not isinstance(weight, QFont.Weight):
+        weight = {100: QFont.Weight.Thin, 200: QFont.Weight.ExtraLight,
+                  300: QFont.Weight.Light, 400: QFont.Weight.Normal,
+                  500: QFont.Weight.Medium, 600: QFont.Weight.DemiBold,
+                  700: QFont.Weight.Bold, 800: QFont.Weight.ExtraBold,
+                  900: QFont.Weight.Black}.get(int(weight), W_REGULAR)
     return getFont(size, weight)
 
 
@@ -109,6 +120,33 @@ BG_ACTIVE = ("#D4D4D8", "#52525B")
 # 边框两级（default=常规描边 / strong=强调描边）
 BORDER = ("#E4E4E7", "#27272A")
 BORDER_STRONG = ("#D4D4D8", "#3F3F46")
+
+# --------------------------------------------------------------------- 工作台层次
+# 第二轮界面重做引入的层次模型（三档，够用且不会套娃）：
+#   画布 = 页面底（BG_PRIMARY），侧栏与画布同底、靠 1px 竖线分隔
+#   面板 = 内容块（SURFACE），1px 描边 + 12px 圆角
+#   板内 = 面板里再分块（SURFACE_HI），用于表头、输入槽、选中行
+# 之前只有「卡片 = 5% 白叠加」这一档，导致所有内容都长成同一张卡（同构即噪声）。
+SURFACE = ("#FFFFFF", "#111114")
+SURFACE_HI = ("#F7F7F8", "#191A1E")
+HAIRLINE_SOFT = ("#F0F0F1", "#1E1F23")
+
+# 行高（px）：设置行 / 导航项 / 任务行。固定值而不是自适应，保证列表节奏一致。
+ROW_H = 56
+NAV_H = 34
+TASK_ROW_H = 66
+
+# --------------------------------------------------------------------- 氛围层
+# 第二轮界面重做里唯一"装饰性"的部分，三条自律：
+#   1. 只做**静态**渐变/光晕/描边高光，不做动画，不参与交互，不接收鼠标；
+#   2. 光晕面积大但透明度极低（深色 6~10%、浅色 4~6%），不抢文字对比度；
+#   3. 每屏最多两团，且都锚在页面角落，不居中压在内容上。
+# 目的是让近纯黑的画布不"死平"，而不是加一堆发光线框。
+GLOW_PRIMARY = ("#1A4A8E", "#3B82F6")     # 主光晕（跟随强调色相，不与语义色冲突）
+GLOW_SECONDARY = ("#0E7490", "#6366F1")   # 副光晕，与主光晕拉开色相
+GLOW_ALPHA_DARK = 26                      # 深色下光晕 alpha（0-255）
+GLOW_ALPHA_LIGHT = 16                     # 浅色下光晕 alpha
+HIGHLIGHT = ("rgba(255,255,255,0.9)", "rgba(255,255,255,0.06)")  # 面板顶部 1px 高光
 
 # 兼容旧名：SURFACE_SUNKEN 是"下沉"的浅填充（封面槽、图标底板），
 # HAIRLINE 是 1px 描边/分隔线，两者分别指向新的三级底与边框。
