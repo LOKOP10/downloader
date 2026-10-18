@@ -50,6 +50,15 @@ _NAV_ITEMS = [
 ]
 
 
+def _safe_int(value, default: int, low: int = 1, high: int = 64) -> int:
+    """把配置值转成 [low, high] 区间的 int；坏值回退默认值，绝不抛异常"""
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, num))
+
+
 def resource_path(*parts) -> str:
     """兼容源码运行与 PyInstaller 单文件模式，定位随包资源。"""
     base = getattr(sys, "_MEIPASS", None)
@@ -82,10 +91,13 @@ class MainWindow(FluentWindow):
         super().__init__()
         self.config = config
         self._mica_enabled = False
+        # 配置项已在 Config.load() 里收敛成合法 int；这里再兜一层，
+        # 避免手工改坏 config.json 时 int() 抛 ValueError 让程序起不来。
+        # （_safe_int 随 9ce9b0f 一并合入，见本文件顶部）
         self.ctx = AppContext(config, DownloadManager(
-            int(config.get("max_concurrent", 3)), self,
+            _safe_int(config.get("max_concurrent", 3), 3), self,
             segment_enabled=bool(config.get("segment_download", True)),
-            segment_connections=int(config.get("segment_connections", 8))))
+            segment_connections=_safe_int(config.get("segment_connections", 8), 8)))
 
         self.homeInterface = HomeInterface(self.ctx, self)
         self.batchInterface = BatchInterface(self.ctx, self)
