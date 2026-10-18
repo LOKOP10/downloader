@@ -153,15 +153,34 @@ class DouyinParser:
                     return rich
             raise ParseError("作品信息获取失败。" + "；".join(errors[-2:]))
 
-        # 分享页/列表接口的 bit_rate 常缺高清档，用真实浏览器的详情接口补全
-        if browser_job is not None and not info.is_image:
+        # 分享页/列表接口的 bit_rate 常缺高清档，用真实浏览器的详情接口补全；
+        # 图文作品的分享页还会退化成纯静图，动图视频轨只在详情接口里，需要合并
+        if browser_job is not None:
             browser_job.join(timeout=30)
             rich = rich_box.get("info")
-            # 分辨率相同时帧率更高也算"更全"（分享页常只有 1080p30，
-            # 浏览器详情接口才给 1080p60 那条）
-            if rich and self._quality_key(rich) > self._quality_key(info):
-                return rich
+            if rich:
+                if info.is_image:
+                    info = self._merge_image_detail(info, rich)
+                # 分辨率相同时帧率更高也算"更全"（分享页常只有 1080p30，
+                # 浏览器详情接口才给 1080p60 那条）
+                elif self._quality_key(rich) > self._quality_key(info):
+                    return rich
         return info
+
+    @staticmethod
+    def _merge_image_detail(info: VideoInfo, rich: VideoInfo) -> VideoInfo:
+        """用浏览器详情接口补全图文作品的动图视频轨
+
+        分享页对图文作品只下发静图，动图视频轨在详情接口的
+        `images[].video.play_addr` 里。图片数量一致时只补 live 分组，
+        保留分享页的无水印图片地址；详情接口更完整时整体采用。
+        """
+        if not rich.is_image or not any(rich.image_live_url_groups):
+            return info
+        if len(rich.image_urls) == len(info.image_urls):
+            info.image_live_url_groups = list(rich.image_live_url_groups)
+            return info
+        return rich
 
     @staticmethod
     def _quality_key(info: VideoInfo) -> Tuple[int, int]:
