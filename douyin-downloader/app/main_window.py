@@ -30,6 +30,7 @@ from .view import design as D
 from .view import workspace as W
 from .view.batch_interface import BatchInterface
 from .view.converter_interface import ConverterInterface
+from .view.gif_interface import GifInterface
 from .view.home_interface import HomeInterface
 from .view.manga_interface import MangaInterface
 from .view.video_interface import VideoInterface
@@ -46,6 +47,7 @@ _NAV_ITEMS = [
     (FIF.PHOTO, "漫画阅读器", "本地 JPG 文件夹书架与阅读进度"),
     (FIF.MOVIE, "本地视频", "下载完成的视频自动入库，记住播放位置接着看"),
     (FIF.VIDEO, "WebP 转 MP4", "本地 WebP 动图批量转 MP4 / 顺序合并"),
+    (FIF.PHOTO, "MP4 转 GIF", "把视频片段转成循环 GIF，可批量处理"),
     (FIF.SETTING, "设置", "下载行为、平台登录态与界面外观"),
 ]
 
@@ -105,6 +107,7 @@ class MainWindow(FluentWindow):
         self.mangaInterface = MangaInterface(self.ctx, self)
         self.videoInterface = VideoInterface(self.ctx, self)
         self.converterInterface = ConverterInterface(self.ctx, self)
+        self.gifInterface = GifInterface(self.ctx, self)
         self.settingInterface = SettingInterface(self.ctx, self)
         self.taskInterface.read_manga.connect(self._read_manga)
 
@@ -127,6 +130,7 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.mangaInterface, FIF.PHOTO, "漫画阅读器")
         self.addSubInterface(self.videoInterface, FIF.MOVIE, "本地视频")
         self.addSubInterface(self.converterInterface, FIF.VIDEO, "WebP 转 MP4")
+        self.addSubInterface(self.gifInterface, FIF.PHOTO, "MP4 转 GIF")
         self.addSubInterface(self.settingInterface, FIF.SETTING, "设置")
 
         self.navigationInterface.setAcrylicEnabled(False)
@@ -136,7 +140,7 @@ class MainWindow(FluentWindow):
         self._pages = [self.homeInterface, self.batchInterface,
                        self.taskInterface, self.mangaInterface,
                        self.videoInterface, self.converterInterface,
-                       self.settingInterface]
+                       self.gifInterface, self.settingInterface]
 
         # 左侧导航（TabBar 这个名字保留：外部与测试用它判断导航项数量 /
         # 主题按钮位置，语义仍是「导航栏」，只是方向从横改竖）
@@ -173,8 +177,11 @@ class MainWindow(FluentWindow):
 
     def closeEvent(self, event):
         # 异步等待转换取消清理，防止解释器退出时遗留 FFmpeg；不阻塞 GUI 线程。
-        if self.converterInterface._busy:
-            self.converterInterface.shutdown()
+        converters = (self.converterInterface, self.gifInterface)
+        busy = [page for page in converters if page._busy]
+        if busy:
+            for page in busy:
+                page.shutdown()
             event.ignore()
             QTimer.singleShot(100, self.close)
             return
@@ -182,7 +189,8 @@ class MainWindow(FluentWindow):
         if event.isAccepted():
             self.mangaInterface.shutdown()
             self.videoInterface.shutdown()
-            self.converterInterface.shutdown()
+            for page in converters:
+                page.shutdown()
 
     def _on_tab_changed(self, index: int):
         if 0 <= index < len(self._pages):
