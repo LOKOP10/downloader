@@ -17,6 +17,13 @@ from app.core.parser import DouyinParser
 from app.view.home_interface import HomeInterface
 
 
+def _static_item():
+    item = _live_item()
+    for img in item["images"]:
+        img.pop("video", None)
+    return item
+
+
 def _live_item():
     return {
         "aweme_id": "7123456789",
@@ -62,6 +69,30 @@ class DouyinLiveParseTest(unittest.TestCase):
         self.assertFalse(info.is_image)
         self.assertEqual(info.play_url, "https://cdn/play/1.mp4")
         self.assertEqual(info.image_live_url_groups, [])
+
+
+class ParseVideoMergeTest(unittest.TestCase):
+    def test_browser_detail_fills_live_groups_for_gallery(self):
+        share = DouyinParser()._build_info(_static_item())
+        rich = DouyinParser()._build_info(_live_item())
+        parser = DouyinParser(profile_dir="dummy")
+        with patch.object(parser, "_from_share_page", return_value=share), \
+                patch.object(parser, "_from_browser_detail", return_value=rich), \
+                patch.object(parser, "parse_ids", return_value=("video", "123")):
+            info = parser.parse_video("https://www.douyin.com/video/123")
+        self.assertEqual(info.image_urls, share.image_urls)
+        self.assertEqual(info.image_live_url_groups,
+                         rich.image_live_url_groups)
+
+    def test_keeps_share_when_detail_has_no_live(self):
+        share = DouyinParser()._build_info(_static_item())
+        rich = DouyinParser()._build_info(_static_item())
+        parser = DouyinParser(profile_dir="dummy")
+        with patch.object(parser, "_from_share_page", return_value=share), \
+                patch.object(parser, "_from_browser_detail", return_value=rich), \
+                patch.object(parser, "parse_ids", return_value=("video", "123")):
+            info = parser.parse_video("https://www.douyin.com/video/123")
+        self.assertEqual(info.image_live_url_groups, [[] for _ in share.image_urls])
 
 
 class _FakeConfig:
