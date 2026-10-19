@@ -125,6 +125,8 @@ object CookieStore {
         Platform.DOUYIN -> listOf("sessionid", "sessionid_ss", "sid_tt")
         // 禁漫的 AVS 是登录凭证；但接口大部分情况不校验，所以只作提示
         Platform.JMCOMIC -> listOf("AVS")
+        // 三个站点都免登录即可解析；填 Cookie 只影响受限内容，不算登录凭证
+        Platform.IWARA, Platform.PORNHUB, Platform.HANIME1 -> emptyList()
         Platform.UNKNOWN -> emptyList()
     }
 
@@ -174,6 +176,9 @@ object CookieStore {
         Platform.JMCOMIC -> listOf(
             CookieField("AVS", "18comic 登录后的 AVS（看排行榜/收藏等需登录内容才用得上）", false),
         )
+
+        // 免登录站点：不提供逐项字段，弹窗里直接粘贴整段 Cookie 即可
+        Platform.IWARA, Platform.PORNHUB, Platform.HANIME1 -> emptyList()
 
         Platform.UNKNOWN -> emptyList()
     }
@@ -251,6 +256,22 @@ object CookieStore {
      * 抖音额外写一份 iesdouyin.com —— 解析走的是这个域，和 douyin.com 不互通。
      * 放主线程执行，CookieManager 首次调用会初始化 Chromium，别堵住调用方。
      */
+    /**
+     * 把已保存的 Cookie 全量同步给 WebView。
+     *
+     * 启动时调一次：WebView 的 CookieManager 与 [CookieStore] 是两份数据，
+     * 只有「保存」那一刻会同步。升级、或直接写入 prefs 的场景下 WebView
+     * 里是空的，而抖音/X 的解析走的是 WebView。
+     */
+    fun syncAllToWebView() {
+        if (prefs == null) return
+        Platform.values().forEach { p ->
+            if (p == Platform.UNKNOWN) return@forEach
+            val c = get(p)
+            if (c.isNotEmpty()) syncToWebView(p, c)
+        }
+    }
+
     private fun syncToWebView(platform: Platform, cookie: String) {
         main.post {
             runCatching {

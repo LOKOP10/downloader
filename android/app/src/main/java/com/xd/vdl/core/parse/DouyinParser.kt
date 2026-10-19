@@ -60,6 +60,7 @@ object DouyinParser : Parser {
                 ?: ID_ANY.find(target)?.value
             if (id == null) {
                 target = Http.resolveFinalUrl(url, Platform.DOUYIN, Http.UA_IPHONE)
+                AppLog.i("抖音短链解析：$url → $target")
                 if (target.contains("/user/")) {
                     throw ParseException("这是用户主页链接，请用单个作品链接")
                 }
@@ -198,17 +199,47 @@ object DouyinParser : Parser {
                 urlMatch = { it.contains("/aweme/v1/web/aweme/detail/") },
                 pick = { pickDetail(it, id) },
                 timeoutMs = budget,
+                // 在页面里直接定位作品对象再返回（而不是把 200KB 的整页状态搬回来）：
+                // 大字符串跨进程传输在页面 JS 线程忙时会丢回调，实测同一页有时能拿到
+                // 206KB、有时三枪全空。
                 pageStateJs = """(function() {
-                    var data = document.getElementById('RENDER_DATA');
-                    if (data && data.textContent) return data.textContent;
-                    var p = window.__INITIAL_STATE__ || window.__INIT_PROPS__;
-                    if (p) { try { return JSON.stringify(p); } catch(e){} }
-                    return JSON.stringify(window._ROUTER_DATA || window._SSR_HYDRATED_DATA || {});
+                    var ID = "$id";
+                    function find(o, d) {
+                        if (!o || d > 10 || typeof o !== 'object') return null;
+                        if (o.aweme_id === ID || o.awemeId === ID) return o;
+                        for (var k in o) {
+                            try {
+                                var v = o[k];
+                                if (v && typeof v === 'object') {
+                                    var r = find(v, d + 1);
+                                    if (r) return r;
+                                }
+                            } catch(e) {}
+                        }
+                        return null;
+                    }
+                    function tryParse(s) {
+                        if (!s) return null;
+                        try { return JSON.parse(s); } catch(e) {
+                            try { return JSON.parse(decodeURIComponent(s)); } catch(e2) { return null; }
+                        }
+                    }
+                    var el = document.getElementById('RENDER_DATA');
+                    var obj = el && el.textContent ? tryParse(el.textContent) : null;
+                    if (!obj) obj = window._ROUTER_DATA || window.__INITIAL_STATE__ || window.__INIT_PROPS__ || null;
+                    if (!obj) return null;
+                    var hit = find(obj, 0);
+                    return hit ? JSON.stringify(hit) : null;
                 })()""",
                 pageStatePick = { raw ->
-                    val json = JSONObject(if (raw.startsWith("%7B", true))
-                        URLDecoder.decode(raw, "UTF-8") else raw)
-                    findItem(json, id = id)
+                    try {
+                        val json = JSONObject(raw)
+                        AppLog.i("抖音页面状态命中作品：images=${json.optJSONArray("images")?.length() ?: -1}")
+                        json
+                    } catch (e: Exception) {
+                        AppLog.w("抖音页面状态解析失败：${e.message}")
+                        null
+                    }
                 },
             )
             if (item != null) return buildInfo(item)
@@ -325,17 +356,29 @@ object DouyinParser : Parser {
     private fun buildInfo(item: JSONObject): VideoInfo {
         val video = item.optJSONObject("video") ?: JSONObject()
 
-        // 图集
+        // 图集（静态图 + 动图视频轨）
         val imageUrls = mutableListOf<String>()
+        val liveGroups = mutableListOf<List<String>>()
         item.optJSONArray("images")?.let { arr ->
             for (i in 0 until arr.length()) {
-                val urls = arr.optJSONObject(i)?.optJSONArray("url_list") ?: continue
-                if (urls.length() > 0) {
-                    // 取最后一张地址（桌面版实测是最高清）
-                    imageUrls.add(
-                        if (urls.length() > 1) urls.optString(urls.length() - 1)
-                        else urls.optString(0))
-                }
+                val img = arr.optJSONObject(i) ?: continue
+                val urls = img.optJSONArray("url_list") ?: continue
+                if (urls.length() == 0) continue
+                // 取最后一张地址（桌面版实测是最高清）
+                imageUrls.add(
+                    if (urls.length() > 1) urls.optString(urls.length() - 1)
+                    else urls.optString(0))
+                // 图文里的 Live Photo：静图在 url_list，动图视频轨在 video.play_addr。
+                // 静态图的 video 字段可能为空，只有能拿到 play_addr 才算动图。
+                val group = mutableListOf<String>()
+                img.optJSONObject("video")?.optJSONObject("play_addr")
+                    ?.optJSONArray("url_list")?.let { g ->
+                        for (j in 0 until g.length()) {
+                            val u = g.optString(j)
+                            if (u.isNotEmpty()) group.add(u.replace("playwm", "play"))
+                        }
+                    }
+                liveGroups.add(group)
             }
         }
 
@@ -423,6 +466,9 @@ object DouyinParser : Parser {
             }
         }
 
+        if (imageUrls.isNotEmpty()) {
+            AppLog.i("抖音图文：${imageUrls.size} 张，其中动图 ${liveGroups.count { it.isNotEmpty() }} 张")
+        }
         if (qualities.isEmpty() && imageUrls.isEmpty()) {
             throw ParseException("作品数据中无有效下载地址")
         }
@@ -435,6 +481,7 @@ object DouyinParser : Parser {
             durationMs = video.optLong("duration"),
             qualities = qualities,
             images = imageUrls,
+            liveVideos = liveGroups,
         )
     }
 }

@@ -70,7 +70,7 @@ fun HomeScreen(vm: AppViewModel, activity: Activity) {
         Spacer(Modifier.height(10.dp))
         GkPageTitle("视频解析")
         Text(
-            "支持 抖音 / B站 / X / Instagram / 小红书 / 禁漫 链接",
+            "支持 抖音 / B站 / X / Instagram / 小红书 / 禁漫 / Iwara / Pornhub / hanime1 链接",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 6.dp, top = 2.dp),

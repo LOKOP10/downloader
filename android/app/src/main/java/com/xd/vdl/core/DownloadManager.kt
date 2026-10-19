@@ -6,6 +6,7 @@ import com.xd.vdl.core.download.JmDownloader
 import com.xd.vdl.core.download.MediaStoreExporter
 import com.xd.vdl.core.download.JmReconcile
 import com.xd.vdl.core.download.Muxer
+import com.xd.vdl.core.gif.GifEncoder
 import com.xd.vdl.core.manga.MangaChapter
 import com.xd.vdl.core.manga.MangaFiles
 import com.xd.vdl.core.manga.MangaIntake
@@ -346,18 +347,38 @@ object DownloadManager {
         val saved = mutableListOf<String>()
         info.images.forEachIndexed { i, url ->
             update(id) { it.copy(note = "第 ${i + 1}/$n 张") }
-            val ext = if (url.contains("webp")) "webp" else "jpg"
-            val f = File(work, "%02d.%s".format(i + 1, ext))
-            Downloader.download(url, info.platform, f) { d, t ->
-                val cur = if (t > 0) (d * 100 / t).toInt() else 0
-                update(id) {
-                    it.copy(downloaded = (i * 100 + cur).toLong(), total = n * 100L)
+            val live = info.liveVideos.getOrNull(i).orEmpty()
+            val uri: String = if (live.isNotEmpty()) {
+                // 动图（Live Photo）：先下视频轨，完成瞬间转同名 GIF（与桌面端一致）
+                val mp4 = File(work, "%02d_live.mp4".format(i + 1))
+                Downloader.downloadFirst(live, info.platform, mp4, { d, t ->
+                    val cur = if (t > 0) (d * 100 / t).toInt() else 0
+                    update(id) {
+                        it.copy(downloaded = (i * 100 + cur).toLong(), total = n * 100L)
+                    }
+                })
+                val gif = File(work, "%02d.gif".format(i + 1))
+                val ok = GifEncoder.encodeMp4(mp4, gif)
+                runCatching { mp4.delete() }
+                if (!ok || !gif.exists()) {
+                    throw IOException("第 ${i + 1}/$n 张动图转 GIF 失败")
                 }
+                (MediaStoreExporter.exportImage(ctx, gif, "image/gif")
+                    ?: throw IOException("第 ${i + 1}/$n 张动图写入相册失败")).toString()
+            } else {
+                val ext = if (url.contains("webp")) "webp" else "jpg"
+                val f = File(work, "%02d.%s".format(i + 1, ext))
+                Downloader.download(url, info.platform, f) { d, t ->
+                    val cur = if (t > 0) (d * 100 / t).toInt() else 0
+                    update(id) {
+                        it.copy(downloaded = (i * 100 + cur).toLong(), total = n * 100L)
+                    }
+                }
+                (MediaStoreExporter.exportImage(
+                    ctx, f, if (ext == "webp") "image/webp" else "image/jpeg",
+                ) ?: throw IOException("第 ${i + 1}/$n 张图片写入相册失败")).toString()
             }
-            val uri = MediaStoreExporter.exportImage(
-                ctx, f, if (ext == "webp") "image/webp" else "image/jpeg",
-            ) ?: throw IOException("第 ${i + 1}/$n 张图片写入相册失败")
-            saved.add(uri.toString())
+            saved.add(uri)
             // 每存一张就同步一次，下完前也能预览已拿到的部分
             update(id) { it.copy(savedUris = saved.toList()) }
         }

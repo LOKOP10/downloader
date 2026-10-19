@@ -348,4 +348,36 @@ object Http {
                 if (r.isSuccessful) r.header("Content-Length")?.toLongOrNull() ?: -1L else -1L
             }
         }.getOrDefault(-1L)
+
+    /**
+     * 用 1 字节 Range 取文件总长。
+     *
+     * Iwara / Pornhub / hanime1 的 CDN 要么挡 HEAD（回 405），要么只有 206 响应
+     * 的 `Content-Range` 才带真实总长（此时 `Content-Length` 恒为 1，不能用）。
+     * 拿不到返回 -1，不影响下载，只是界面不显示大小。
+     */
+    fun rangeLength(
+        url: String,
+        platform: Platform,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): Long = runCatching {
+        val target = url.toHttpUrlOrNull() ?: return -1L
+        val b = Request.Builder()
+            .url(target)
+            .header("User-Agent", UA_DESKTOP)
+            .header("Range", "bytes=0-0")
+        val ref = platform.referer
+        if (ref.isNotEmpty()) b.header("Referer", ref)
+        val ck = cookieForRequest(platform, target)
+        if (ck.isNotEmpty()) b.header("Cookie", ck)
+        extraHeaders.forEach { (k, v) -> if (v.isNotEmpty()) b.header(k, v) }
+        client.newCall(b.build()).execute().use { r ->
+            val m = Regex("/(\\d+)\\s*$").find(r.header("Content-Range").orEmpty())
+            when {
+                m != null -> m.groupValues[1].toLongOrNull() ?: -1L
+                r.code == 200 -> r.header("Content-Length")?.toLongOrNull() ?: -1L
+                else -> -1L
+            }
+        }
+    }.getOrDefault(-1L)
 }

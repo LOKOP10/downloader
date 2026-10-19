@@ -30,7 +30,7 @@ object ParserRouter {
         // 没链接（或链接不认识）：只有整段像禁漫车号才认，否则报错
         if (JmParser.parseCode(text).second.isNotEmpty()) return text to JmParser
         if (url == null) throw ParseException("没找到链接，请把完整的分享文案粘贴进来")
-        throw ParseException("暂不支持这个链接（当前支持 抖音 / B站 / X / Instagram / 小红书 / 禁漫）")
+        throw ParseException("暂不支持这个链接（当前支持 抖音 / B站 / X / Instagram / 小红书 / 禁漫 / Iwara / Pornhub / hanime1）")
     }
 
     fun forUrl(url: String): Parser {
@@ -46,8 +46,10 @@ object ParserRouter {
         Platform.INSTAGRAM -> InstagramParser
         Platform.XIAOHONGSHU -> XiaohongshuParser
         Platform.JMCOMIC -> JmParser
-        Platform.UNKNOWN -> throw ParseException(
-            "暂不支持这个链接（当前支持 抖音 / B站 / X / Instagram / 小红书 / 禁漫）")
+        Platform.IWARA -> IwaraParser
+        Platform.PORNHUB -> PornhubParser
+        Platform.HANIME1 -> Hanime1Parser
+        Platform.UNKNOWN -> throw ParseException("暂不支持这个链接（当前支持 抖音 / B站 / X / Instagram / 小红书 / 禁漫 / Iwara / Pornhub / hanime1）")
     }
 }
 
