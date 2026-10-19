@@ -20,7 +20,10 @@ hiddenimports += pw_hiddenimports
 
 # jmcomic 在业务代码里是延迟 import，必须 collect_all 打进包。
 # 只 hiddenimport 时 jmcomic 会进 PYZ，运行期 import 失败就会提示「缺少 jmcomic 组件」。
-for _pkg in ('jmcomic', 'curl_cffi', 'common'):
+# yt_dlp 在业务代码里是延迟 import（YouTube 解析），同样必须 collect_all：
+# 只 hiddenimport 时运行期会提示「缺少 yt-dlp 组件」。yt_dlp_ejs 里是
+# JS 挑战求解脚本（core.min.js / lib.min.js），按数据文件打包。
+for _pkg in ('jmcomic', 'curl_cffi', 'common', 'yt_dlp', 'yt_dlp_ejs'):
     _d, _b, _h = collect_all(_pkg)
     datas += _d
     binaries += _b
@@ -36,6 +39,8 @@ hiddenimports += [
     '_cffi_backend',
     'Crypto', 'Crypto.Cipher', 'Crypto.Cipher.AES',
     'PIL', 'PIL.Image', 'yaml', 'common',
+    'yt_dlp', 'yt_dlp.utils', 'yt_dlp.extractor.youtube',
+    'yt_dlp_ejs', 'yt_dlp_ejs.yt', 'yt_dlp_ejs.yt.solver',
 ]
 try:
     import curl_cffi as _curl_cffi

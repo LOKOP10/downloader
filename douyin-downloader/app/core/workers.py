@@ -10,7 +10,7 @@ log = get_logger("worker")
 
 
 class ParseWorker(QThread):
-    """解析单个作品（抖音 / X / Instagram / B站 / 小红书 / Iwara / Pornhub / hanime1 / 禁漫，自动路由）"""
+    """解析单个作品（抖音 / X / Instagram / B站 / 小红书 / YouTube / Iwara / Pornhub / hanime1 / 禁漫，自动路由）"""
     succeeded = Signal(object)   # VideoInfo
     failed = Signal(str)
 

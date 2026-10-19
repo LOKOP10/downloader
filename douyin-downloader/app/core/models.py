@@ -68,7 +68,7 @@ class VideoInfo:
         """作品在整个下载目录里的唯一标识（用于增量更新去重）
 
         各平台的 `aweme_id` 语义不同，但都满足「同一作品跨次解析稳定不变」：
-        抖音/B站/X/小红书/Iwara/Pornhub/hanime1 是平台作品 ID，Instagram 是
+        抖音/B站/X/小红书/YouTube/Iwara/Pornhub/hanime1 是平台作品 ID，Instagram 是
         shortcode，禁漫是车号。`source` 前缀避免不同平台撞号（Iwara 与
         hanime1 的 ID 都可能出现纯数字）。
         识别不出 ID 时回退到「来源_标题」，宁可比对偏严也不要漏判重复。

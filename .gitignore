@@ -127,3 +127,7 @@ Desktop.ini
 # 离屏几何回归测试临时配置
 /douyin-downloader/colfix_*/
 /douyin-downloader/colreg_*/
+
+# ---------- 网站（website/）----------
+# wrangler 在部署目录留下的本地缓存，不是站点内容
+website/.wrangler/

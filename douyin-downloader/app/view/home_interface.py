@@ -42,7 +42,7 @@ log = get_logger("home")
 
 # 输入框下的一行能力提示（12px 三级色）。平台清单只在这里出现一次 ——
 # 页头再说一遍、按钮再说一遍就是三重复读（设计原则 3）。
-_PLATFORM_LINE = ("抖音 · B站 · 小红书 · X · Instagram · Iwara · Pornhub · hanime1 · 禁漫"
+_PLATFORM_LINE = ("抖音 · B站 · 小红书 · X · Instagram · YouTube · Iwara · Pornhub · hanime1 · 禁漫"
                   "　｜　视频 / 图集 / 漫画车号")
 
 
@@ -361,13 +361,16 @@ class HomeInterface(ScrollArea):
             parts.append(f"BGM {info.music_title}")
         self.metaLabel.setText(" · ".join(parts))
         # 统计：显示折成「万」，精确值放 tooltip —— 量级要一眼可读，精度不能丢
+        # 第三个统计位：抖音等平台是分享数；YouTube 拿到的其实是播放量，别标成"分享"
+        play_label = "观看" if info.source == "youtube" else "分享"
         self.statsLabel.set_stats([
             ("点赞", fmt_count(info.digg_count)),
             ("评论", fmt_count(info.comment_count)),
-            ("分享", fmt_count(info.share_count)),
+            (play_label, fmt_count(info.share_count)),
         ])
         self.statsLabel.setToolTip(
-            f"点赞 {info.digg_count}　评论 {info.comment_count}　分享 {info.share_count}")
+            f"点赞 {info.digg_count}　评论 {info.comment_count}　"
+            f"{play_label} {info.share_count}")
         if info.source == "jmcomic":
             self.downloadBtn.setText("下载本子")
             self.downloadBtn.setIcon(FIF.PHOTO)
