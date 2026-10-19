@@ -3,7 +3,7 @@
 ; 产物：dist\视频下载器-<version>-setup.exe
 
 #define MyAppName "视频下载器"
-#define MyAppVersion "1.8.16.0"
+#define MyAppVersion "1.8.17.0"
 #define MyAppPublisher "个人项目"
 #define MyAppExeName "视频下载器.exe"
 ; 测试安装可用编译参数指定独立AppId，避免碰用户现有安装/卸载注册信息。
@@ -18,9 +18,9 @@ AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppCopyright=仅供个人学习与备份使用
-VersionInfoVersion=1.8.16.0
+VersionInfoVersion=1.8.17.0
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=1.8.16.0
+VersionInfoProductVersion=1.8.17.0
 VersionInfoDescription={#MyAppName} 安装程序
 VersionInfoCopyright=仅供个人学习与备份使用
 DefaultDirName={localappdata}\Programs\{#MyAppName}
@@ -57,7 +57,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [Components]
 Name: "main"; Description: "主程序"; Types: full compact custom; Flags: fixed
-Name: "ffmpeg"; Description: "ffmpeg 合并组件（B 站 1080P+ 音视频合并，约 100MB）"; Types: full
+Name: "ffmpeg"; Description: "ffmpeg 合并组件（B 站 / YouTube 的 DASH 音视频合并，约 100MB）"; Types: full
 
 [Types]
 Name: "full"; Description: "完整安装（含 ffmpeg）"
