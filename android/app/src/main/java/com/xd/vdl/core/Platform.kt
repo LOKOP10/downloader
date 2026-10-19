@@ -10,6 +10,9 @@ enum class Platform(val label: String) {
     INSTAGRAM("Instagram"),
     XIAOHONGSHU("小红书"),
     JMCOMIC("禁漫"),
+    IWARA("Iwara"),
+    PORNHUB("Pornhub"),
+    HANIME1("hanime1"),
     UNKNOWN("未知");
 
     /** 下载/接口请求要带的 Referer，缺失会被 CDN 403 */
@@ -21,6 +24,9 @@ enum class Platform(val label: String) {
             INSTAGRAM -> "https://www.instagram.com/"
             XIAOHONGSHU -> "https://www.xiaohongshu.com/"
             JMCOMIC -> "https://18comic.vip/"
+            IWARA -> "https://www.iwara.tv/"
+            PORNHUB -> "https://www.pornhub.com/"
+            HANIME1 -> "https://hanime1.me/"
             UNKNOWN -> ""
         }
 
@@ -33,6 +39,9 @@ enum class Platform(val label: String) {
             INSTAGRAM -> "https://www.instagram.com"
             XIAOHONGSHU -> "https://www.xiaohongshu.com"
             JMCOMIC -> "https://18comic.vip"
+            IWARA -> "https://www.iwara.tv"
+            PORNHUB -> "https://www.pornhub.com"
+            HANIME1 -> "https://hanime1.me"
             UNKNOWN -> ""
         }
 
@@ -78,6 +87,12 @@ enum class Platform(val label: String) {
                 h == "xiaohongshu.com" || h.endsWith(".xiaohongshu.com") ||
                     h == "xhslink.com" || h.endsWith(".xhslink.com") ||
                     h == "xhslink.cn" || h.endsWith(".xhslink.cn") -> XIAOHONGSHU
+
+                h == "iwara.tv" || h.endsWith(".iwara.tv") -> IWARA
+                h == "pornhub.com" || h.endsWith(".pornhub.com") ||
+                    h == "phncdn.com" || h.endsWith(".phncdn.com") -> PORNHUB
+                h == "hanime1.me" || h.endsWith(".hanime1.me") ||
+                    h == "hembed.com" || h.endsWith(".hembed.com") -> HANIME1
 
                 JM_HOSTS.any { h.contains(it) } -> JMCOMIC
 

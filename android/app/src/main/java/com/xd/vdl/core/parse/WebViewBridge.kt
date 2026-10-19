@@ -188,6 +188,12 @@ class WebViewBridge(private val activity: Activity) {
             blockNetworkImage = true
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             userAgentString = ua
+            // ⚠️ 必须让 CSS 视口是「桌面宽度」：WebView 默认按设备 DPR 缩放，
+            // 900px 物理宽在 DPR 2.5 下只有 360px CSS 宽 —— 抖音据此判定为
+            // 移动端，只下发 SSR 页、**不发** /aweme/detail XHR（桌面端 Playwright
+            // 视口 1280 所以能拦到）。实测不设这两项时 hook 状态恒为 cap:0。
+            useWideViewPort = true
+            loadWithOverviewMode = true
         }
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
@@ -208,7 +214,8 @@ class WebViewBridge(private val activity: Activity) {
                     // 真机排查用：把「hook 一条都没拦到」与「拦到了但 pick 不认」
                     // 分开 —— 前者是注入时机/正则的问题，后者是数据字段的问题
                     if (v == null) {
-                        AppLog.i("WebView 详情无数据：$pageUrl（拦到响应体 $seen 条）")
+                        AppLog.i("WebView 详情无数据：$pageUrl（拦到响应体 $seen 条，" +
+                            "落地页=${wv.url} 标题=${wv.title}）")
                     }
                     if (cont.isActive) cont.resume(v)
                 }
@@ -270,17 +277,25 @@ class WebViewBridge(private val activity: Activity) {
                 // 并不保证一定早于文档脚本（它只是「尽快」），所以另外注册一个
                 // 文档开始脚本（API 24+ 的 TRIGGER_UNSPECIFIED 即文档开始），
                 // 两个都装：hook 自身有幂等守卫，装两次无副作用。
+                // 抖音按浏览器指纹判定：WebView 的 navigator.webdriver 为 true 时
+                // 页面只走 SSR、不发 detail XHR（桌面端 Playwright 打开同一页能拦到，
+                // 安卓 WebView 拦到 0 条，差异就在这里）。这里把最常见的几个特征抹平。
+                val stealth = stealthJs()
                 if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                     runCatching {
-                        WebViewCompat.addDocumentStartJavaScript(wv, hookJs(matchPaths), setOf("*"))
+                        WebViewCompat.addDocumentStartJavaScript(wv, stealth + hookJs(matchPaths), setOf("*"))
                     }
                 }
                 wv.webViewClient = object : WebViewClient() {
                     override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                        view?.evaluateJavascript(hookJs(matchPaths), null)
+                        view?.evaluateJavascript(stealth + hookJs(matchPaths), null)
                     }
 
                     override fun onPageFinished(view: WebView?, url: String?) {
+                        // 诊断：hook 是否装上、页面里攒了几条
+                        view?.evaluateJavascript(
+                            "JSON.stringify({hooked: window.__vdlHooked||0, cap: (window.__vdlCap||[]).length})"
+                        ) { r -> AppLog.i("WebView hook 状态：$r（${pageUrl.take(60)}）") }
                         // 页面收尾后再冲几次；随后靠轮询兜住「XHR还在路上」。
                         // 这里的时机是**相对页面加载完成**，不是绝对时间。
                         for (delay in CATCH_UP_MS) handler.postDelayed({ drain() }, delay)
@@ -307,10 +322,24 @@ class WebViewBridge(private val activity: Activity) {
                 // 轮询读到结束为止：详情响应可能比 onPageFinished 早、也可能晚，
                 // 只有一直读才能「一到就收」。drain 内部按 [picked] 增量取，
                 // 命中即 finish（finish 会清掉本 handler 的所有回调）。
+                // 内联状态除了固定时刻的几枪，也挂进轮询：实测 evaluateJavascript
+                // 的回调在页面 JS 线程忙时会丢（同一页有时 1.2s 就有 206KB 状态，
+                // 有时三枪全丢），只靠固定时刻会漏采。
+                var lastStateCheck = 0L
                 val poll = object : Runnable {
                     override fun run() {
                         if (done) return
                         drain()
+                        val now = SystemClock.elapsedRealtime()
+                        if (pageStateJs != null && pageStatePick != null &&
+                            now - lastStateCheck >= 1200L) {
+                            lastStateCheck = now
+                            wv.evaluateJavascript(pageStateJs) { r ->
+                                if (done) return@evaluateJavascript
+                                val state = decodeJsString(r) ?: return@evaluateJavascript
+                                runCatching { pageStatePick(state) }.getOrNull()?.let { finish(it) }
+                            }
+                        }
                         handler.postDelayed(this, POLL_MS)
                     }
                 }
@@ -418,6 +447,12 @@ class WebViewBridge(private val activity: Activity) {
             blockNetworkImage = true
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             userAgentString = ua
+            // ⚠️ 必须让 CSS 视口是「桌面宽度」：WebView 默认按设备 DPR 缩放，
+            // 900px 物理宽在 DPR 2.5 下只有 360px CSS 宽 —— 抖音据此判定为
+            // 移动端，只下发 SSR 页、**不发** /aweme/detail XHR（桌面端 Playwright
+            // 视口 1280 所以能拦到）。实测不设这两项时 hook 状态恒为 cap:0。
+            useWideViewPort = true
+            loadWithOverviewMode = true
         }
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
@@ -609,6 +644,16 @@ class WebViewBridge(private val activity: Activity) {
             }
             append('"')
         }
+
+        /** 抹平「这是 WebView」的几个常见特征，避免站点退回 SSR 不发 XHR */
+        internal fun stealthJs(): String = """
+            (function(){
+              try { Object.defineProperty(navigator, 'webdriver', { get: function(){ return undefined; } }); } catch(e){}
+              try { Object.defineProperty(navigator, 'languages', { get: function(){ return ['zh-CN','zh','en']; } }); } catch(e){}
+              try { Object.defineProperty(navigator, 'plugins', { get: function(){ return [1,2,3,4,5]; } }); } catch(e){}
+              try { if (!window.chrome) { window.chrome = { runtime: {} }; } } catch(e){}
+            })();
+        """.trimIndent()
 
         /**
          * 注入的 hook：包住 fetch 与 XHR，把 URL 命中 [pathsJs] 里任一子串的响应体

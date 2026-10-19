@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         AppLog.setup(java.io.File(filesDir, "logs"))
         CookieStore.init(this)
+        CookieStore.syncAllToWebView()
         com.xd.vdl.core.SaveSettings.init(this)
         // 本地漫画书架的加载是异步的（要读 JSON），这里只挂上，界面用 awaitLoaded 等
         com.xd.vdl.core.manga.MangaLibrary.init(this)

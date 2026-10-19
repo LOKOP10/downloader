@@ -8,7 +8,7 @@
 
 | 站点 | 说明 |
 |---|---|
-| 抖音 | 去水印、作者主页批量、图文动图转 GIF |
+| 抖音 | 去水印、作者主页批量、图文动图转 GIF（动图转 GIF 仅桌面端） |
 | B 站 | DASH 音视频自动合并 |
 | 小红书 | 需用 App 分享的链接（含 `xsec_token`） |
 | X (Twitter) | 敏感内容推文需填 `auth_token` / `ct0` |
@@ -19,7 +19,12 @@
 | hanime1 | |
 | 禁漫天堂 | 种子号解析 |
 
-> 上表是**桌面端**的完整列表。安卓端少四个：YouTube / Iwara / Pornhub / hanime1 目前只有桌面端支持。
+> 上表是**桌面端**的完整列表。安卓端目前只少 YouTube；Iwara / Pornhub / hanime1 已补上（桌面端同一套 HTTP 链路）。
+>
+> 仍有一处差异：**抖音图文里的动图（Live Photo）转 GIF** 目前只有桌面端完整可用。安卓端
+> 解析层（`images[].video.play_addr`）与 GIF 编码（纯 Kotlin GIF89a）都已就绪，但抖音在安卓
+> WebView 里只下发 SSR 静态图、不触发 `/aweme/v1/web/aweme/detail/` 请求（登录态与视口/
+> 指纹都试过，hook 状态始终 `cap:0`），拿不到动图视频轨，因此只能落到静态图。
 
 ## 目录结构
 
