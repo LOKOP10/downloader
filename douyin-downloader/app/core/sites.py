@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-"""多平台单作品解析路由：抖音 / X / Instagram / Bilibili / 小红书 / Iwara / Pornhub / hanime1 / 禁漫
+"""多平台单作品解析路由：抖音 / X / Instagram / Bilibili / 小红书 / YouTube / Iwara / Pornhub / hanime1 / 禁漫
 
 - 抖音：走 parser.DouyinParser（分享页 RENDER_DATA，最高码率）
+- YouTube：交给 yt-dlp 解签名/JS 挑战拿 formats，本程序只挑 mp4 档位
+  （见 youtube.py；下载与 ffmpeg 合并仍由本项目负责）
 - X：走 syndication 公开接口（免登录），variants 中挑最高码率 mp4
 - Instagram：媒体 info 接口 + HTML 内嵌（严格校验 shortcode，避免串号）
 - Bilibili：wbi 签名 API + DASH 合并
@@ -27,6 +29,7 @@ from .domain import platform_of_host, referer_for
 from .models import VideoInfo, clean_cookie
 from .parser import DouyinParser, ParseError, PC_UA
 from .site_ctx import SiteContext, default_site_context
+from .youtube import parse_youtube
 
 __all__ = ["SiteContext", "default_site_context", "detect_platform",
            "extract_url", "parse_share"]
@@ -51,7 +54,8 @@ def detect_platform(url: str) -> str:
         return "jmcomic"
     raise ParseError(
         f"暂不支持该链接（{urllib.parse.urlparse(url).netloc}）。目前支持 "
-        "抖音 / X / Instagram / B站 / 小红书 / Iwara / Pornhub / hanime1 / 禁漫")
+        "抖音 / X / Instagram / B站 / 小红书 / YouTube / Iwara / Pornhub / "
+        "hanime1 / 禁漫")
 
 
 def _find_key_recursive(node, key, depth: int = 0):
@@ -126,13 +130,16 @@ def _parse_share(text: str, ctx: SiteContext = None, **legacy) -> VideoInfo:
             return parse_pornhub(url)
         if platform == "hanime1":
             return parse_hanime1(url)
+        if platform == "youtube":
+            return parse_youtube(url)
         # 未知域名但路径像禁漫 /album/ /photo/
         kind, jmid = try_parse_jm(url)
         if jmid:
             return parse_jmcomic(url, ctx.jm_cookie)
         raise ParseError(
             f"暂不支持该链接（{urllib.parse.urlparse(url).netloc}）。目前支持 "
-            "抖音 / X / Instagram / B站 / 小红书 / Iwara / Pornhub / hanime1 / 禁漫")
+            "抖音 / X / Instagram / B站 / 小红书 / YouTube / Iwara / Pornhub / "
+            "hanime1 / 禁漫")
     kind, jmid = try_parse_jm(text)
     if jmid:
         return parse_jmcomic(text, ctx.jm_cookie)

@@ -13,12 +13,13 @@
 | 小红书 | 需用 App 分享的链接（含 `xsec_token`） |
 | X (Twitter) | 敏感内容推文需填 `auth_token` / `ct0` |
 | Instagram | 需登录的内容要填 Cookie |
+| YouTube | 高画质为音视频分离，需 ffmpeg 合并；需能访问 YouTube |
 | Iwara | |
 | Pornhub | |
 | hanime1 | |
 | 禁漫天堂 | 种子号解析 |
 
-> 上表是**桌面端**的完整列表。安卓端少三个：Iwara / Pornhub / hanime1 目前只有桌面端支持。
+> 上表是**桌面端**的完整列表。安卓端少四个：YouTube / Iwara / Pornhub / hanime1 目前只有桌面端支持。
 
 ## 目录结构
 
@@ -29,6 +30,7 @@
 │   ├── app/
 │   │   ├── core/               # 核心逻辑：解析、下载、配置、日志
 │   │   │   ├── sites.py        # 各站点解析规则（主要体量在这里）
+│   │   │   ├── youtube.py      # YouTube 解析（yt-dlp 取格式，下载仍由本程序做）
 │   │   │   ├── downloader.py   # 分段下载（IDM 式多连接）
 │   │   │   ├── parser.py       # 链接识别与路由
 │   │   │   ├── domain.py       # 各站点域名集合与 Referer 规则
@@ -97,12 +99,15 @@ python main.py
 
 ### 打包成 exe
 
-发布构建按版本目录输出，安装包脚本从 `setup.iss` 读取版本号：
+`dist/` 只保留**一份**可运行目录，目录名永远等于当前版本号。升级时不要保留旧版本目录，按下面的顺序构建：
 
 ```powershell
 pyinstaller --noconfirm --distpath dist/<version> build_exe.spec
+powershell -ExecutionPolicy Bypass -File installer/sync_dist.ps1
 powershell -ExecutionPolicy Bypass -File installer/build_setup.ps1
 ```
+
+`sync_dist.ps1` 把 `dist/` 下的旧版本目录改名成当前版本（`config.json`、`edge_profile*` 登录态、视频库都跟着走，不会丢），并把桌面与目录内的快捷方式指向新路径。
 
 产物为 `dist/<version>/视频下载器.exe` 与 `dist/视频下载器-<version>-setup.exe`。
 版本号唯一来源是 `app_version.txt`，升级时同步 `installer/setup.iss` 的
@@ -125,7 +130,7 @@ cd douyin-downloader
 python -m pytest tests -q
 ```
 
-当前全量 215 项（含 32 项子测试）。MP4 转 GIF / WebP 转换测试会调用本机
+当前全量 271 项（含 46 项子测试）。MP4 转 GIF / WebP 转换测试会调用本机
 ffmpeg；打包目录可把 `dist/tools` 加入 PATH。
 
 ### 使用
@@ -136,7 +141,8 @@ ffmpeg；打包目录可把 `dist/tools` 加入 PATH。
 1. 粘链接，程序识别站点并解析，选画质，下载。
 2. 下载完成后可自动复制文件到剪贴板（配置项 `auto_copy_file`）。
 3. 需要登录的站点（X / Instagram / 小红书 / 禁漫）在设置页填 Cookie，或用内置的浏览器登录流程导出。
-4. B 站 DASH 合并需要 ffmpeg，在「设置 → 合并组件（ffmpeg）」里下载，不是 pip 依赖。
+4. B 站 / YouTube 的 DASH 合并需要 ffmpeg，在「设置 → 合并组件（ffmpeg）」里下载，
+   不是 pip 依赖。YouTube 需要能访问外网，程序会自动使用 Windows 系统代理。
 5. 解析失败或下载卡住，看 `logs/app.log`。
 
 ### 本地视频（Windows）
