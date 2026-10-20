@@ -228,9 +228,25 @@ object Http {
         return b.build()
     }
 
-    /** 发一个 GET 并返回响应体字符串（用于公开接口，如 B站） */
-    fun getText(url: String, platform: Platform, mobile: Boolean = false): String {
-        client.newCall(request(url, platform, mobile)).execute().use { resp ->
+    /**
+     * 发一个 GET 并返回响应体字符串（用于公开接口，如 B站）。
+     *
+     * [timeoutSeconds] > 0 时给这次调用单独设一个总超时：小红书这类「先 HTTP 再
+     * WebView 兜底」的链路，默认 60s 的读超时会让一次失败白等一分钟，用户看到
+     * 的就是「点了解析一直没反应」。
+     */
+    fun getText(
+        url: String,
+        platform: Platform,
+        mobile: Boolean = false,
+        timeoutSeconds: Long = 0,
+    ): String {
+        val c = if (timeoutSeconds > 0) {
+            client.newBuilder()
+                .callTimeout(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+        } else client
+        c.newCall(request(url, platform, mobile)).execute().use { resp ->
             if (!resp.isSuccessful) {
                 throw java.io.IOException("HTTP ${resp.code}")
             }

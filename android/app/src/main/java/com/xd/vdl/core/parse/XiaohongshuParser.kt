@@ -24,7 +24,10 @@ object XiaohongshuParser : Parser {
             throw ParseException("小红书分享链接已失效，请重新复制笔记链接")
 
         // 保留 xsec_token 原样访问，否则详情页可能只返回空壳。
-        val html = runCatching { Http.getText(target, Platform.XIAOHONGSHU) }.getOrDefault("")
+        // 12s 总超时：失败时尽快转 WebView（默认 60s 读超时会让「解析」看起来卡死）
+        val html = runCatching {
+            Http.getText(target, Platform.XIAOHONGSHU, timeoutSeconds = 12)
+        }.getOrDefault("")
         fromHtml(html, id)?.let { return@withContext it }
         val rendered = WebViewBridge(activity).loadAndExtract(target, ua = Http.UA_DESKTOP,
             settleMs = 1800, timeoutMs = 25000,
