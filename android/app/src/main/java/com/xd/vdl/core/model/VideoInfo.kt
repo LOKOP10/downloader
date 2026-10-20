@@ -43,11 +43,6 @@ data class VideoInfo(
     val durationMs: Long = 0L,
     val qualities: List<Quality> = emptyList(),
     val images: List<String> = emptyList(),
-    /**
-     * 与 [images] 一一对应的动图视频轨候选（抖音图文里的 Live Photo）。
-     * 空列表 = 静态图；非空时下载视频轨后转成同名 GIF（与桌面端一致）。
-     */
-    val liveVideos: List<List<String>> = emptyList(),
     // ---- 禁漫专用（其他平台保持默认值） ----
     /** "album"（整本，多章）/ "photo"（单章） */
     val jmKind: String = "",

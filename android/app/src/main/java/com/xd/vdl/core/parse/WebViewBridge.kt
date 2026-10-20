@@ -294,8 +294,7 @@ class WebViewBridge(private val activity: Activity) {
                     override fun onPageFinished(view: WebView?, url: String?) {
                         // 诊断：hook 是否装上、页面里攒了几条
                         view?.evaluateJavascript(
-                            "JSON.stringify({hooked: window.__vdlHooked||0, cap: (window.__vdlCap||[]).length," +
-                                "urls: (window.__vdlUrls||[]).slice(0,40)})"
+                            "JSON.stringify({hooked: window.__vdlHooked||0, cap: (window.__vdlCap||[]).length})"
                         ) { r -> AppLog.i("WebView hook 状态：$r（${pageUrl.take(60)}）") }
                         // 页面收尾后再冲几次；随后靠轮询兜住「XHR还在路上」。
                         // 这里的时机是**相对页面加载完成**，不是绝对时间。
@@ -680,21 +679,12 @@ class WebViewBridge(private val activity: Activity) {
                 if (!txt) return;
                 try { if (hit(url)) window.__vdlCap.push(txt); } catch(e){}
               }
-              window.__vdlUrls = [];
-              function note(u){
-                try {
-                  if (u && window.__vdlUrls.length < 100) {
-                    window.__vdlUrls.push(String(u).slice(0, 220));
-                  }
-                } catch(e){}
-              }
               var of = window.fetch;
               if (of) {
                 window.fetch = function(input, init){
                   var p = of.apply(this, arguments);
                   try {
                     var u = (typeof input === 'string') ? input : (input && input.url);
-                    note(u);
                     p.then(function(r){ try { r.clone().text().then(function(t){ keep(u, t); }); } catch(e){} });
                   } catch(e){}
                   return p;
@@ -702,7 +692,7 @@ class WebViewBridge(private val activity: Activity) {
               }
               var xo = XMLHttpRequest.prototype.open;
               var xs = XMLHttpRequest.prototype.send;
-              XMLHttpRequest.prototype.open = function(m, u){ this.__u = u; note(u); return xo.apply(this, arguments); };
+              XMLHttpRequest.prototype.open = function(m, u){ this.__u = u; return xo.apply(this, arguments); };
               XMLHttpRequest.prototype.send = function(){
                 try {
                   this.addEventListener('load', function(){
