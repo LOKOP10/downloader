@@ -21,10 +21,9 @@
 
 > 上表是**桌面端**的完整列表。安卓端目前只少 YouTube；Iwara / Pornhub / hanime1 已补上（桌面端同一套 HTTP 链路）。
 >
-> 仍有一处差异：**抖音图文里的动图（Live Photo）转 GIF** 目前只有桌面端完整可用。安卓端
-> 解析层（`images[].video.play_addr`）与 GIF 编码（纯 Kotlin GIF89a）都已就绪，但抖音在安卓
-> WebView 里只下发 SSR 静态图、不触发 `/aweme/v1/web/aweme/detail/` 请求（登录态与视口/
-> 指纹都试过，hook 状态始终 `cap:0`），拿不到动图视频轨，因此只能落到静态图。
+> 仍有一处差异：**抖音图文里的动图（Live Photo）转 GIF** 只有桌面端支持。安卓端在 WebView 里
+> 拿不到抖音的作品详情（页面只下发 SSR 骨架、不触发 `/aweme/v1/web/aweme/detail/` 请求，
+> hook 状态恒为 `cap:0`，登录态、视口与指纹都试过），因此安卓端只保存静态图。
 
 ## 目录结构
 

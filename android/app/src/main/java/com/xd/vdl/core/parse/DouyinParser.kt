@@ -356,29 +356,17 @@ object DouyinParser : Parser {
     private fun buildInfo(item: JSONObject): VideoInfo {
         val video = item.optJSONObject("video") ?: JSONObject()
 
-        // 图集（静态图 + 动图视频轨）
+        // 图集
         val imageUrls = mutableListOf<String>()
-        val liveGroups = mutableListOf<List<String>>()
         item.optJSONArray("images")?.let { arr ->
             for (i in 0 until arr.length()) {
-                val img = arr.optJSONObject(i) ?: continue
-                val urls = img.optJSONArray("url_list") ?: continue
-                if (urls.length() == 0) continue
-                // 取最后一张地址（桌面版实测是最高清）
-                imageUrls.add(
-                    if (urls.length() > 1) urls.optString(urls.length() - 1)
-                    else urls.optString(0))
-                // 图文里的 Live Photo：静图在 url_list，动图视频轨在 video.play_addr。
-                // 静态图的 video 字段可能为空，只有能拿到 play_addr 才算动图。
-                val group = mutableListOf<String>()
-                img.optJSONObject("video")?.optJSONObject("play_addr")
-                    ?.optJSONArray("url_list")?.let { g ->
-                        for (j in 0 until g.length()) {
-                            val u = g.optString(j)
-                            if (u.isNotEmpty()) group.add(u.replace("playwm", "play"))
-                        }
-                    }
-                liveGroups.add(group)
+                val urls = arr.optJSONObject(i)?.optJSONArray("url_list") ?: continue
+                if (urls.length() > 0) {
+                    // 取最后一张地址（桌面版实测是最高清）
+                    imageUrls.add(
+                        if (urls.length() > 1) urls.optString(urls.length() - 1)
+                        else urls.optString(0))
+                }
             }
         }
 
@@ -466,9 +454,6 @@ object DouyinParser : Parser {
             }
         }
 
-        if (imageUrls.isNotEmpty()) {
-            AppLog.i("抖音图文：${imageUrls.size} 张，其中动图 ${liveGroups.count { it.isNotEmpty() }} 张")
-        }
         if (qualities.isEmpty() && imageUrls.isEmpty()) {
             throw ParseException("作品数据中无有效下载地址")
         }
@@ -481,7 +466,6 @@ object DouyinParser : Parser {
             durationMs = video.optLong("duration"),
             qualities = qualities,
             images = imageUrls,
-            liveVideos = liveGroups,
         )
     }
 }
