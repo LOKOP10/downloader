@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>视频下载器 — 一条链接，把视频和图片存下来</title>
+<meta name="description" content="抖音、B站、小红书、X、Instagram、YouTube 等多站点视频 / 图文 / 漫画下载工具。多连接加速、批量下载、封面入库、WebP 与 GIF 转换，Windows 与 Android 双端，全部在本机完成。" />
+<meta name="theme-color" content="#1A4A8E" />
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="assets/icon.png" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="视频下载器 — 一条链接，把视频和图片存下来" />
+<meta property="og:description" content="多站点视频 / 图文 / 漫画下载工具，Windows 与 Android 双端，全部在本机完成。" />
+<meta property="og:image" content="assets/shot-home.png" />
+<link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top" aria-label="视频下载器首页">
+      <img src="assets/icon.svg" alt="" width="30" height="30" />
+      <span class="brand-name">视频下载器</span>
+      <span class="pill">v1.8.17.0</span>
+    </a>
+
+    <nav class="nav-links" id="navLinks" aria-label="主导航">
+      <a href="#features">功能</a>
+      <a href="#shots">界面</a>
+      <a href="#download">下载</a>
+      <a href="#changelog">更新日志</a>
+      <a href="#faq">常见问题</a>
+      <a class="btn btn-ghost btn-sm nav-github" href="https://github.com/LOKOP01/downloader" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </nav>
+
+    <button class="nav-toggle" id="navToggle" aria-label="展开菜单" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="hero-bg" aria-hidden="true"></div>
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="dot"></span>Windows 10 / 11 · Android 7.0+ · 本地运行</p>
+        <h1>一条链接，<br />全部存到本地。</h1>
+        <p class="lead">
+          抖音、B站、小红书、X、Instagram、YouTube 等多站点的视频、图文与漫画，粘贴即解析。
+          多连接加速、整页批量、封面入库、WebP 与 GIF 转换——全部在你自己的电脑和手机上完成。
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#download">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+            下载 Windows 版
+          </a>
+          <a class="btn btn-secondary" href="#download">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 18h.01"/></svg>
+            获取 Android 版
+          </a>
+        </div>
+        <ul class="hero-meta">
+          <li>免费使用</li>
+          <li>无需注册登录</li>
+          <li>数据不经过服务器</li>
+        </ul>
+      </div>
+
+      <div class="hero-visual">
+        <div class="glow" aria-hidden="true"></div>
+        <figure class="window">
+          <img src="assets/shot-home.png" width="1280" height="720" alt="视频下载器主界面：左侧导航与视频解析页" />
+        </figure>
+        <div class="float-card float-a" aria-hidden="true">
+          <span class="fc-title">解析完成</span>
+          <span class="fc-row"><b>1080P</b><span>·</span><b>720P</b><span>·</span><b>仅音频</b></span>
+        </div>
+        <div class="float-card float-b" aria-hidden="true">
+          <span class="fc-title">下载中</span>
+          <span class="fc-bar"><i style="width:78%"></i></span>
+          <span class="fc-sub">78% · 8 连接</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="strip">
+    <div class="wrap strip-inner">
+      <span class="strip-label">支持站点</span>
+      <ul class="chips">
+        <li>抖音</li><li>B 站</li><li>小红书</li><li>X (Twitter)</li><li>Instagram</li><li>YouTube</li><li>Iwara</li><li>禁漫天堂</li><li>图集 / 漫画</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="features" class="section">
+    <div class="wrap">
+      <header class="section-head">
+        <p class="eyebrow">功能</p>
+        <h2>下载之外，它还是个本地媒体工作台</h2>
+        <p class="section-desc">从解析、下载到转换、阅读，一条链路在同一个窗口里闭环，不用再装五六个工具。</p>
+      </header>
+
+      <div class="grid grid-3">
+        <article class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div>
+          <h3>粘贴即解析</h3>
+          <p>自动识别站点与链接类型，解析出清晰度列表；分享文案整段粘贴也能认出来，回车直接开始。YouTube 单视频最高 2160p，按高度聚合档位并自动配 m4a 音轨。</p>
+        </article>
+
+        <article class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg></div>
+          <h3>IDM 式多连接</h3>
+          <p>单个文件最多 32 条分段连接并发下载，弱网、跨境线路也能尽可能跑满带宽。</p>
+        </article>
+
+        <article class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></div>
+          <h3>主页批量</h3>
+          <p>贴一个作者主页，整页作品一次抓取；按作者自动建目录，失败项可单独重试。</p>
+        </article>
+
+        <article class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m2 17 5.5-5.5a2 2 0 0 1 2.8 0L22 23"/></svg></div>
+          <h3>图文动图转 GIF</h3>
+          <p>抖音图文里的 Live Photo 视频轨自动补齐、下载并转成 GIF，静态图与动图各走各的，互不阻塞。</p>
+        </article>
+
+        <article class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="3"/></svg></div>
+          <h3>WebP 转 MP4</h3>
+          <p>多选或拖入，批量独立转换，也可按列表顺序合并成一个 MP4；保留每帧毫秒时长，透明区域合成到指定底色。</p>
+        </article>
+
+        <article class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M7 8h10M7 12h6M7 16h8"/></svg></div>
+          <h3>MP4 转 GIF</h3>
+          <p>两遍调色板避免闪烁，支持片段截取、帧率与调色板档位；后台转换可随时取消，失败不留残片。</p>
+        </article>
+
+        <article class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="m10 9 5 3-5 3V9Z"/></svg></div>
+          <h3>本地视频库</h3>
+          <p>下载完成自动入库，封面、标题、时长一览；记住每部片的播放位置，下次从上次停下的地方继续。</p>
+        </article>
+
+        <article class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg></div>
+          <h3>漫画阅读器</h3>
+          <p>文件夹即一本书，按自然排序翻页（第 2 章排在前面）；支持搜索、收藏、阅读进度与双页阅读。</p>
+        </article>
+
+        <article class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg></div>
+          <h3>登录态本地保存</h3>
+          <p>需要登录的内容，可用内置浏览器登录流程导出 Cookie，或手动填写；凭据只存在本机配置文件里。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="shots" class="section section-alt">
+    <div class="wrap">
+      <header class="section-head">
+        <p class="eyebrow">界面</p>
+        <h2>八个页面，一个工作台</h2>
+        <p class="section-desc">左侧导航、内容画布、底部状态条常驻——后台任务数、保存目录和版本一眼可见。</p>
+      </header>
+
+      <div class="shots" data-shots>
+        <div class="tabs" role="tablist" aria-label="界面预览">
+          <button class="tab is-active" role="tab" aria-selected="true" data-shot="home">视频解析</button>
+          <button class="tab" role="tab" aria-selected="false" data-shot="batch">批量下载</button>
+          <button class="tab" role="tab" aria-selected="false" data-shot="task">下载任务</button>
+          <button class="tab" role="tab" aria-selected="false" data-shot="manga">漫画阅读器</button>
+          <button class="tab" role="tab" aria-selected="false" data-shot="converter">WebP 转 MP4</button>
+          <button class="tab" role="tab" aria-selected="false" data-shot="setting">设置</button>
+        </div>
+        <figure class="window shot-frame">
+          <img id="shotImg" src="assets/shot-home.png" width="1280" height="720" alt="视频下载器界面预览" />
+        </figure>
+        <p class="shot-caption" id="shotCaption">粘贴一条链接，选清晰度，下载。解析结果展会在下方，不用切页。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="download" class="section">
+    <div class="wrap">
+      <header class="section-head section-head-center">
+        <p class="eyebrow">下载</p>
+        <h2>选你的平台，开始用</h2>
+        <p class="section-desc">安装包与免安装版都在 GitHub Releases 上，附 SHA256 校验值。</p>
+      </header>
+
+      <div class="dl-grid">
+        <article class="dl-card dl-card-dark">
+          <div class="dl-head">
+            <div class="dl-icon"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M0 3.45 9.75 2.1v9.45H0V3.45Zm0 17.1 9.75 1.35v-9.3H0v7.95Zm10.8 1.5L24 24V12.6H10.8v9.45Zm0-20.1v9.6H24V0L10.8 1.95Z"/></svg></div>
+            <div>
+              <h3>Windows</h3>
+              <p class="dl-sub">Windows 10 / 11 · 64 位</p>
+            </div>
+            <span class="pill pill-dark">v1.8.17.0</span>
+          </div>
+          <p class="dl-desc">完整功能：解析、批量、任务、漫画、本地视频、WebP 转 MP4、MP4 转 GIF，含 YouTube 单视频解析。</p>
+          <a class="btn btn-white" href="https://github.com/LOKOP01/downloader/releases/download/v1.8.17.0/VideoDownloader-1.8.17.0-setup.exe" rel="noopener">
+            下载安装版 <span class="size">146 MB</span>
+          </a>
+          <a class="dl-alt" href="https://github.com/LOKOP01/downloader/releases/download/v1.8.17.0/VideoDownloader-1.8.17.0.exe" rel="noopener">免安装单文件版 · 120 MB</a>
+          <a class="dl-alt dl-sha" href="https://github.com/LOKOP01/downloader/releases/download/v1.8.17.0/SHA256SUMS.txt" rel="noopener">SHA256 校验值</a>
+        </article>
+
+        <article class="dl-card">
+          <div class="dl-head">
+            <div class="dl-icon dl-icon-green"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18a.38.38 0 0 0-.14-.52.38.38 0 0 0-.52.14l-1.86 3.22a11.4 11.4 0 0 0-4.92 0L10.14 5.9a.38.38 0 0 0-.52-.14.38.38 0 0 0-.14.52L11.32 9.5A11.2 11.2 0 0 0 2 20.2h20a11.2 11.2 0 0 0-9.4-10.72ZM7 17.2a1.3 1.3 0 1 1 0-2.6 1.3 1.3 0 0 1 0 2.6Zm10 0a1.3 1.3 0 1 1 0-2.6 1.3 1.3 0 0 1 0 2.6Z"/></svg></div>
+            <div>
+              <h3>Android</h3>
+              <p class="dl-sub">Android 7.0+ · APK</p>
+            </div>
+            <span class="pill">v1.0.51</span>
+          </div>
+          <p class="dl-desc">系统分享即下载，下载完成自动导出到相册；内置离线漫画书架。</p>
+          <a class="btn btn-primary" href="https://github.com/LOKOP01/downloader/releases/download/android-v1.0.51/VideoDownloader-Android-1.0.51.apk" rel="noopener">
+            下载 APK <span class="size">16.8 MB</span>
+          </a>
+          <a class="dl-alt" href="https://github.com/LOKOP01/downloader/releases/tag/android-v1.0.51" rel="noopener">查看版本说明</a>
+        </article>
+      </div>
+
+      <p class="dl-foot">
+        需要历史版本？<a href="https://github.com/LOKOP01/downloader/releases" rel="noopener">在 GitHub Releases 查看全部</a>
+      </p>
+    </div>
+  </section>
+
+  <section id="changelog" class="section section-alt">
+    <div class="wrap">
+      <header class="section-head">
+        <p class="eyebrow">更新日志</p>
+        <h2>最近做了什么</h2>
+        <p class="section-desc">每个版本都附完整说明与校验值，升级前可以先看改了什么。</p>
+      </header>
+
+      <ol class="timeline">
+        <li>
+          <div class="tl-dot"></div>
+          <div class="tl-body">
+            <div class="tl-meta"><span class="pill">Windows</span><span class="pill">1.8.17.0</span><time>2026-10-19</time></div>
+            <h3>新增 YouTube 视频解析</h3>
+            <p>支持 watch / shorts / music / youtu.be 等链接，按高度聚合最多 8 档画质并自动配 m4a 音轨；高画质为 DASH 分离轨道，需要 ffmpeg 合并。解析与下载走系统代理，播放列表与频道链接本地拦截。</p>
+          </div>
+        </li>
+        <li>
+          <div class="tl-dot"></div>
+          <div class="tl-body">
+            <div class="tl-meta"><span class="pill">Windows</span><span class="pill">1.8.15.0</span><time>2026-10-18</time></div>
+            <h3>新增「MP4 转 GIF」页面</h3>
+            <p>两遍调色板避免闪烁，支持起始时间与时长、帧率、宽度、颜色数与 Bayer 抖动；后台转换可取消，输出先写临时目录再原子发布。</p>
+          </div>
+        </li>
+        <li>
+          <div class="tl-dot"></div>
+          <div class="tl-body">
+            <div class="tl-meta"><span class="pill">Windows</span><span class="pill">1.8.14.1</span><time>2026-10-18</time></div>
+            <h3>界面重做 + 合入长期分支的安全修复</h3>
+            <p>整体视觉与交互重做，设置项重新分组；同时合入长期分支上的修复。</p>
+          </div>
+        </li>
+        <li>
+          <div class="tl-dot"></div>
+          <div class="tl-body">
+            <div class="tl-meta"><span class="pill">Windows</span><span class="pill">1.8.14.0</span><time>2026-10-17</time></div>
+            <h3>本地视频：封面、续播与源文件管理</h3>
+            <p>下载完成的视频自动入库，记封面与播放位置，支持倍速、全屏与键盘快捷键。</p>
+          </div>
+        </li>
+        <li>
+          <div class="tl-dot"></div>
+          <div class="tl-body">
+            <div class="tl-meta"><span class="pill">Android</span><span class="pill">1.0.51</span><time>2026-10-20</time></div>
+            <h3>撤销抖音图文动图解析、修复小红书解析卡住</h3>
+            <p>安卓端在 WebView 里拿不到抖音的作品详情，动图视频轨无法获取，按实际能力撤掉该功能（图文仍保存静态图）。同时给小红书解析的 HTTP 请求加 12 秒超时，失败时不再出现「点了解析一直没反应」。</p>
+          </div>
+        </li>
+        <li>
+          <div class="tl-dot"></div>
+          <div class="tl-body">
+            <div class="tl-meta"><span class="pill">Android</span><span class="pill">1.0.50</span><time>2026-10-19</time></div>
+            <h3>新增 Iwara / Pornhub / hanime1 三个站点</h3>
+            <p>Iwara 带签名取档位表，Pornhub 走 flashvars 与 get_media 两跳，hanime1 直接读页面视频源；三者免登录，解析后显示精确文件大小。</p>
+          </div>
+        </li>
+        <li>
+          <div class="tl-dot"></div>
+          <div class="tl-body">
+            <div class="tl-meta"><span class="pill">Android</span><span class="pill">1.0.49</span><time>2026-10-17</time></div>
+            <h3>本地漫画书架、离线阅读与下载完整性修复</h3>
+            <p>下载成功的漫画自动入库，断网也能读；移除时可选择仅移出书架或删除文件。</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="faq" class="section">
+    <div class="wrap wrap-narrow">
+      <header class="section-head">
+        <p class="eyebrow">常见问题</p>
+        <h2>你可能想问的</h2>
+      </header>
+
+      <details class="faq-item" open>
+        <summary>需要先装 Python 或其它环境吗？</summary>
+        <p>不需要。下载安装版或免安装版直接运行；只有从源码运行时才需要 Python 3.10+ 与依赖。</p>
+      </details>
+      <details class="faq-item">
+        <summary>Cookie 和登录态会上传到服务器吗？</summary>
+        <p>不会。程序没有自建服务器，解析走各平台公开接口，Cookie 只保存在本机配置文件里，下载与转换全部在本机完成。</p>
+      </details>
+      <details class="faq-item">
+        <summary>B 站 / YouTube 视频下载后没有声音？</summary>
+        <p>B 站与 YouTube 的 1080P 以上都是 DASH 音视频分离，需要 ffmpeg 合并。到「设置 → 合并组件（ffmpeg）」里下载一次即可，不是 pip 依赖。</p>
+      </details>
+      <details class="faq-item">
+        <summary>Windows 提示缺少临时目录，单文件版打不开？</summary>
+        <p>启动解包需要可用的系统临时目录。可以改用文件夹版（需要与 <code>_internal/</code> 一起保留），或清理异常的 TEMP 路径后重试。</p>
+      </details>
+      <details class="faq-item">
+        <summary>支持 macOS 或 iOS 吗？</summary>
+        <p>目前只有 Windows 与 Android 两端。桌面端基于 PySide6，移植需要重做界面与浏览器登录链路，暂未计划。</p>
+      </details>
+      <details class="faq-item">
+        <summary>杀毒软件报毒怎么办？</summary>
+        <p>PyInstaller 打包的程序常被启发式误报。可在 GitHub Releases 对照 SHA256 校验值确认文件一致；介意的话从源码运行。</p>
+      </details>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <div class="footer-brand">
+      <img src="assets/icon.svg" alt="" width="26" height="26" />
+      <div>
+        <strong>视频下载器</strong>
+        <p>个人自用的多站点下载工具</p>
+      </div>
+    </div>
+    <nav class="footer-links" aria-label="页脚导航">
+      <a href="https://github.com/LOKOP01/downloader" rel="noopener">GitHub</a>
+      <a href="https://gitee.com/LOKOP01/downloader" rel="noopener">Gitee</a>
+      <a href="https://github.com/LOKOP01/downloader/releases" rel="noopener">Releases</a>
+      <a href="https://github.com/LOKOP01/downloader/issues" rel="noopener">问题反馈</a>
+    </nav>
+  </div>
+  <div class="wrap footer-legal">
+    <p>仅供个人学习与备份使用。解析能力来自各平台公开的网页接口，下载、存储与传播内容的责任由使用者自负。</p>
+    <p>© <span id="year">2026</span> 视频下载器 · 个人项目</p>
+  </div>
+</footer>
+
+<script src="assets/app.js" defer></script>
+</body>
+</html>
