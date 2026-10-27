@@ -4,8 +4,9 @@ import logging
 import os
 from collections import deque
 
-from PySide6.QtCore import QRectF, QSize, Qt, QUrl, Slot
-from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPainterPath, QPixmap
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl, Slot
+from PySide6.QtGui import (QColor, QDesktopServices, QPainter, QPainterPath, QPen,
+                           QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QListView,
                                QListWidget, QListWidgetItem, QMenu, QMessageBox,
                                QStyle, QStyledItemDelegate, QWidget)
@@ -24,13 +25,31 @@ from .video_player import VideoPlayer
 log = logging.getLogger("vdl.video")
 
 
-class _PosterDelegate(QStyledItemDelegate):
-    """视频卡片：封面海报 + 时长徽章 + 标题 + 续播进度条。"""
+# 卡片右上角删除按钮：鼠标悬停该卡片时才出现，点它走与右键一致的删除确认。
+_DELETE_SIZE = 22
 
-    def __init__(self, covers, parent=None):
+
+def _card_rect(cell):
+    """卡片内容区（与 delegate 的 8px 内缩保持一致）。"""
+    return QRectF(cell).adjusted(8, 8, -8, -8)
+
+
+def _delete_rect(cell):
+    """删除按钮几何：封面右上角。delegate 负责画，视频墙负责判命中，共用一份计算。"""
+    rect = _card_rect(cell)
+    return QRectF(rect.right() - _DELETE_SIZE - 6, rect.top() + 6,
+                  _DELETE_SIZE, _DELETE_SIZE)
+
+
+class _PosterDelegate(QStyledItemDelegate):
+    """视频卡片：封面海报 + 时长徽章 + 标题 + 续播进度条 + 悬停删除按钮。"""
+
+    def __init__(self, covers, view=None, parent=None):
         # covers: {路径: QPixmap|None} 由页面持有并刷新，delegate 只读。
+        # view: 视频墙本身，只用来读悬停行与忙碌状态，delegate 自己不存状态。
         super().__init__(parent)
         self._covers = covers
+        self._view = view
 
     def paint(self, painter, option, index):
         item = index.data(Qt.ItemDataRole.UserRole)
@@ -41,7 +60,7 @@ class _PosterDelegate(QStyledItemDelegate):
         muted = QColor(D.TEXT_SECONDARY[int(dark)])
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(option.rect).adjusted(8, 8, -8, -8)
+        rect = _card_rect(option.rect)
         poster_rect = QRectF(rect.left(), rect.top(), rect.width(), 128)
         clip = QPainterPath()
         clip.addRoundedRect(poster_rect, 10, 10)
@@ -89,7 +108,75 @@ class _PosterDelegate(QStyledItemDelegate):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QColor(D.TEXT_ACCENT[int(dark)]))
             painter.drawRoundedRect(rect.adjusted(-3, -3, 3, 5), 10, 10)
+        view = self._view
+        if (view is not None and not getattr(view, "busy", False)
+                and getattr(view, "hover_row", -1) == index.row()):
+            # 只在鼠标所在卡片上露出删除按钮：卡片墙常态下不该满屏叉号
+            button = _delete_rect(option.rect)
+            hot = bool(getattr(view, "delete_hovered", False))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(D.DANGER[int(dark)]) if hot else QColor(0, 0, 0, 175))
+            painter.drawEllipse(button)
+            painter.setPen(QPen(QColor("#FFFFFF"), 1.6))
+            inset = 6.5
+            painter.drawLine(QPointF(button.left() + inset, button.top() + inset),
+                             QPointF(button.right() - inset, button.bottom() - inset))
+            painter.drawLine(QPointF(button.right() - inset, button.top() + inset),
+                             QPointF(button.left() + inset, button.bottom() - inset))
         painter.restore()
+
+
+class _VideoShelf(QListWidget):
+    """视频墙：悬停露出右上角删除按钮，点按钮删除，点其它位置继续播放。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self.hover_row = -1           # 鼠标所在卡片行号（-1 = 不在任何卡片上）
+        self.delete_hovered = False   # 鼠标是否正压在删除按钮上
+        self.busy = False             # 与页面 _busy 同步，忙碌时不响应删除
+        self.on_delete = None         # callable(QListWidgetItem)
+
+    def _delete_item_at(self, position):
+        """返回被点中的卡片；点不在删除按钮上则返回 None。"""
+        item = self.itemAt(position)
+        if item is None:
+            return None
+        if _delete_rect(self.visualItemRect(item)).contains(QPointF(position)):
+            return item
+        return None
+
+    def mouseMoveEvent(self, event):
+        point = event.position().toPoint()
+        hovered = self.itemAt(point)
+        row = self.row(hovered) if hovered is not None else -1
+        hot = self._delete_item_at(point) is not None and not self.busy
+        if (row, hot) != (self.hover_row, self.delete_hovered):
+            self.hover_row, self.delete_hovered = row, hot
+            self.viewport().update()
+        self.setCursor(Qt.CursorShape.PointingHandCursor if hot else Qt.CursorShape.ArrowCursor)
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        if self.hover_row != -1 or self.delete_hovered:
+            self.hover_row, self.delete_hovered = -1, False
+            self.viewport().update()
+        self.unsetCursor()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and not self.busy:
+            item = self._delete_item_at(event.position().toPoint())
+            if item is not None:
+                # 吃掉这次点击：否则会继续冒泡成 itemClicked，又把视频播起来
+                event.accept()
+                self.hover_row, self.delete_hovered = -1, False
+                self.viewport().update()
+                if callable(self.on_delete):
+                    self.on_delete(item)
+                return
+        super().mousePressEvent(event)
 
 
 class VideoInterface(QWidget):
@@ -124,8 +211,10 @@ class VideoInterface(QWidget):
             "下载完成的视频自动入库 · 支持 MP4 / MKV / WebM · 记住播放位置，关掉再开接着看",
             self)
         header.addWidget(self.heading, 1)
-        self.refreshBtn = PushButton(FIF.SYNC, "刷新", self)
-        self.refreshBtn.setToolTip("重新扫描库里的视频（文件被移动或删除后使用）")
+        self.refreshBtn = PushButton(FIF.SYNC, "检查文件", self)
+        self.refreshBtn.setToolTip(
+            "核对每个视频的源文件是否还在：已被删除的记录自动清理，缺封面的补上。\n"
+            "外置盘 / 网络盘暂时没连上时只提示，不会清掉记录。")
         self.refreshBtn.clicked.connect(self.refresh_files)
         self.moreBtn = PushButton(FIF.MORE, "更多", self)
         self.moreBtn.setToolTip("重新加载库、清理失效记录等")
@@ -155,7 +244,7 @@ class VideoInterface(QWidget):
         self.sort.currentIndexChanged.connect(self.refresh_shelf)
         tools.addWidget(self.sort)
         panel.body.addLayout(tools)
-        self.shelf = QListWidget(self)
+        self.shelf = _VideoShelf(self)
         self.shelf.setViewMode(QListView.ViewMode.IconMode)
         self.shelf.setResizeMode(QListView.ResizeMode.Adjust)
         self.shelf.setMovement(QListView.Movement.Static)
@@ -165,6 +254,7 @@ class VideoInterface(QWidget):
         self.shelf.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.shelf.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.shelf.setItemDelegate(_PosterDelegate(self._covers, self.shelf))
+        self.shelf.on_delete = self._delete_from_card
         self.shelf.setAccessibleName("视频墙")
         self.shelf.itemClicked.connect(self.open_item)
         self.shelf.itemActivated.connect(self.open_item)
@@ -178,7 +268,9 @@ class VideoInterface(QWidget):
         self.empty.setWordWrap(True)
         self.empty.setMinimumHeight(180)
         panel.body.addWidget(self.empty, 1)
-        self.status = D.hint_label("本地播放 · 源文件不变 · 右键可定位文件或移除记录", self)
+        self.status = D.hint_label(
+            "本地播放 · 源文件不变 · 悬停卡片点右上角 × 或右键可删除（可选仅移除记录，或连源文件一起删除）",
+            self)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
         panel.body.addWidget(self.status)
@@ -187,6 +279,8 @@ class VideoInterface(QWidget):
         if self.library.warning:
             self.status.setText(self.library.warning)
         ctx.manager.task_finished.connect(self._queue_completed_video)
+        # 启动后静默核对一次：源文件早被删掉的记录不该继续占着卡片
+        QTimer.singleShot(600, self._prune_missing)
 
     # ------------------------------------------------------------------ 落盘
     def _save(self):
@@ -318,6 +412,7 @@ class VideoInterface(QWidget):
         self._busy = busy
         for button in (self.addBtn, self.folderBtn, self.refreshBtn, self.moreBtn):
             button.setEnabled(not busy)
+        self.shelf.busy = busy
         if not busy and not self._closed and self._auto_add_queue:
             self._drain_auto_add()
 
@@ -335,6 +430,7 @@ class VideoInterface(QWidget):
         else:
             items.sort(key=lambda v: v.last_played, reverse=True)
         self.shelf.clear()
+        self.shelf.hover_row, self.shelf.delete_hovered = -1, False
         for item in items:
             widget_item = QListWidgetItem(item.title)
             widget_item.setData(Qt.ItemDataRole.UserRole, item)
@@ -392,7 +488,11 @@ class VideoInterface(QWidget):
             return
         video = item.data(Qt.ItemDataRole.UserRole)
         if not os.path.isfile(video.path):
-            self.status.setText(f"文件不存在：{video.path}（记录已保留，可右键移除）")
+            # 源文件已被删除：直接清掉这条记录，卡片跟着消失，不留死条目
+            self.library.remove(video)
+            self._save()
+            self.refresh_shelf()
+            self.status.setText(f"源文件已不存在，已清理该记录：{os.path.basename(video.path)}")
             return
         self._show_player(video)
 
@@ -418,50 +518,129 @@ class VideoInterface(QWidget):
 
     # ------------------------------------------------------------------ 维护
     def refresh_files(self):
-        if self._busy:
+        """「检查文件」：核对源文件，已删除的记录直接清掉，缺封面的补上。
+
+        判定分三档，避免把「暂时看不到」当成「已经删了」：
+          文件还在          → 保留；
+          文件没了、目录还在 → 确实被删，移除记录（卡片随之消失）；
+          连目录都访问不到   → 外置盘没插 / 网络盘断开，只提示、不动记录。
+        """
+        if self._busy or self._closed:
+            return
+        items = list(self.library.videos)
+        if not items:
+            self.status.setText("视频库是空的：没有需要检查的记录")
             return
         self._set_busy(True)
-        items = list(self.library.videos)
-        self.status.setText("正在检查文件与刷新记录…")
+        self.status.setText("正在检查视频文件…")
+        ffmpeg, covers_dir = self._ffmpeg, self._covers_dir
 
         def scan():
             results = []
             for item in items:
-                ok = os.path.isfile(item.path) and is_video(item.path)
-                cover = ""
-                if ok and not item.cover:
-                    # 老记录补封面：先找解析附带的 _cover 图，没有再截第一帧
-                    cover = (find_downloaded_cover(item.path)
-                             or extract_first_frame(item.path, self._ffmpeg, self._covers_dir))
-                results.append((item, ok, cover))
+                if os.path.isfile(item.path) and is_video(item.path):
+                    cover = ""
+                    if not item.cover:
+                        # 老记录补封面：先找解析附带的 _cover 图，没有再截第一帧
+                        cover = (find_downloaded_cover(item.path)
+                                 or extract_first_frame(item.path, ffmpeg, covers_dir))
+                    results.append((item, "ok", cover))
+                elif os.path.isdir(os.path.dirname(os.path.abspath(item.path))):
+                    results.append((item, "gone", ""))
+                else:
+                    results.append((item, "offline", ""))
             return results
 
         def done(results, error):
             self._set_busy(False)
-            if error:
-                self.status.setText(f"刷新失败：{error}")
+            if self._closed:
                 return
-            missing = 0
+            if error:
+                self.status.setText(f"检查失败：{error}")
+                return
+            gone = [item for item, state, _ in results if state == "gone"]
+            offline = sum(1 for _, state, _ in results if state == "offline")
             filled = 0
-            for item, ok, cover in results:
-                if not ok:
-                    missing += 1
-                elif cover and not item.cover:
+            for item, state, cover in results:
+                if state == "ok" and cover and not item.cover:
                     item.cover = cover
                     filled += 1
-            saved = self._save()
-            self._cover_generation += 1
+            for item in gone:
+                self.library.remove(item)
+            saved = self._save() if (gone or filled) else True
+            if gone:
+                # 卡片集合变了，丢掉旧的封面解码代次，避免回填到已移除的条目
+                self._cover_generation += 1
             self.refresh_shelf()
-            if saved:
-                text = f"视频库已刷新 · {missing} 个文件暂时无法访问，记录已保留" if missing else "视频库已刷新"
-                if filled:
-                    text += f" · 补齐 {filled} 个封面"
-                self.status.setText(text)
-            if saved:
-                self.status.setText(f"视频库已刷新 · {missing} 个文件暂时无法访问，记录已保留" if missing
-                                    else "视频库已刷新")
+            self.status.setText(self._check_summary(len(items), gone, offline, filled, saved))
 
         self.jobs.start(scan, done)
+
+    @staticmethod
+    def _check_summary(total, gone, offline, filled, saved):
+        """「检查文件」结果的一句话结论：先说清理了什么，再说保留了哪些。"""
+        if not saved:
+            return "视频记录保存失败，本次检查未落盘；请「更多 → 重新加载」后再试。"
+        parts = []
+        if gone:
+            parts.append(f"已清理 {len(gone)} 条失效记录（源文件已不存在）")
+        if offline:
+            parts.append(f"{offline} 个视频所在目录暂时访问不到，记录已保留")
+        if filled:
+            parts.append(f"补齐 {filled} 个封面")
+        if not parts:
+            return f"检查完成：{total} 个视频文件都在，记录无需更新"
+        return "检查完成：" + "；".join(parts)
+
+    def _prune_missing(self):
+        """启动后静默清理一次失效记录：源文件早被删掉的卡片不该继续挂着。
+
+        只动记录、不动任何文件；所在目录整体访问不到时按「暂时不可用」保留，
+        免得拔一次移动硬盘就把播放进度清空。
+        """
+        if self._closed or self._busy or not self.library.videos:
+            return
+        items = list(self.library.videos)
+
+        def scan():
+            gone, offline = [], 0
+            for item in items:
+                if os.path.isfile(item.path):
+                    continue
+                if os.path.isdir(os.path.dirname(os.path.abspath(item.path))):
+                    gone.append(item)
+                else:
+                    offline += 1
+            return gone, offline
+
+        def done(result, error):
+            if self._closed or error or not result:
+                return
+            gone, offline = result
+            if not gone:
+                if offline:
+                    self.status.setText(
+                        f"{offline} 个视频所在目录暂时访问不到（可能是外置盘 / 网络盘未连接），记录已保留")
+                return
+            for item in gone:
+                self.library.remove(item)
+            if not self._save():
+                return
+            self._cover_generation += 1
+            self.refresh_shelf()
+            text = f"已自动清理 {len(gone)} 条失效记录（源文件已不存在）"
+            if offline:
+                text += f" · {offline} 个视频所在目录暂时访问不到，记录已保留"
+            self.status.setText(text)
+
+        self.jobs.start(scan, done)
+
+    def _delete_from_card(self, item):
+        """卡片右上角 ×：走与右键「删除…」完全相同的三选一确认流程。"""
+        video = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if video is None:
+            return
+        self._delete_source(video)
 
     def _context_menu(self, position):
         if self._busy:
@@ -565,8 +744,10 @@ class VideoInterface(QWidget):
         menu.addAction("使用说明", lambda: QMessageBox.information(
             self, "本地视频播放", "添加视频：选择一个或多个视频文件。\n"
             "导入文件夹：递归扫描子目录里的全部视频。\n"
-            "点击封面继续播放，右键可打开文件夹或删除（可选仅移除记录，\n"
-            "或连源文件一起删除，删除不可撤销）。\n"
+            "点击卡片继续播放；鼠标移到卡片上，右上角出现 × 可直接删除，\n"
+            "右键菜单也有删除（可选仅移除记录，或连源文件一起删除，删除不可撤销）。\n"
+            "「检查文件」核对源文件是否还在：已被删除的记录会自动清理，\n"
+            "外置盘 / 网络盘没连上时只提示、不清理。\n"
             "下载任务完成的视频会自动入库（封面图不会）。\n"
             "播放进度保存在程序目录的 video_library.json，原视频不被修改。\n"
             "个别老格式（WMV / RMVB 等）能否播放取决于系统解码器，播不了会有明确提示。"))
