@@ -12,7 +12,7 @@
 
 ## Release
 
-- https://github.com/LOKOP01/downloader/releases/tag/android-v1.0.49
+- https://github.com/LOKOP10/downloader/releases/tag/android-v1.0.49
 - 状态：已发布（非草稿、非预发布）
 - 附件：
   - `VideoDownloader-Android-1.0.49.apk`（17,612,732 字节）
