@@ -142,25 +142,25 @@ class MainWindow(FluentWindow):
                        self.videoInterface, self.converterInterface,
                        self.gifInterface, self.settingInterface]
 
-        # 左侧导航（TabBar 这个名字保留：外部与测试用它判断导航项数量 /
-        # 主题按钮位置，语义仍是「导航栏」，只是方向从横改竖）
-        self.tabBar = W.NavRail(_NAV_ITEMS, app_name="视频下载器",
-                                version=f"v{__version__}", parent=self)
+        # 顶部导航栏（TabBar 这个名字保留：外部与测试用它判断导航项数量 /
+        # 主题按钮位置，语义仍是「导航栏」）
+        self.tabBar = W.TopBar(_NAV_ITEMS, app_name="视频下载器",
+                               version=f"v{__version__}", parent=self)
         self.tabBar.setObjectName("appTabBar")
         self.tabBar.themeButton.clicked.connect(self._toggle_theme)
 
         self.statusBar = W.StatusBar(self)
 
         # widgetLayout 原本只放 stackedWidget。改成：
-        #   [侧栏] + [内容(stackedWidget) / 状态条]
+        #   [顶部 TopBar]
+        #   [内容 stackedWidget]
+        #   [底部 StatusBar]
         self.widgetLayout.removeWidget(self.stackedWidget)
-        self.hBoxLayout.insertWidget(0, self.tabBar)
-        self.hBoxLayout.setStretchFactor(self.tabBar, 0)
-        self.hBoxLayout.setStretchFactor(self.widgetLayout, 1)
 
         right = QVBoxLayout()
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(0)
+        right.addWidget(self.tabBar)
         right.addWidget(self.stackedWidget, 1)
         right.addWidget(self.statusBar)
         self.widgetLayout.addLayout(right)
@@ -202,7 +202,7 @@ class MainWindow(FluentWindow):
 
     def _toggle_theme(self):
         """侧栏底部的明暗切换（太阳 / 月亮图标按钮）"""
-        cur = self.config.get("theme", "dark")
+        cur = self.config.get("theme", D.DEFAULT_THEME)
         self.config.set("theme", "light" if cur != "light" else "dark")
         self._apply_theme()
 
@@ -317,9 +317,11 @@ class MainWindow(FluentWindow):
         super().paintEvent(event)
         if self._mica_enabled:
             return                    # 云母特效时窗口半透明，不叠光晕（会把系统背景染色）
+        if not bool(self.config.get("canvas_glow", False)):
+            return                    # 简约模式：画布不叠光晕（第三轮重做默认关闭，配置项可恢复）
         rect = QRectF(self.rect())
-        rail = self.tabBar.width() if getattr(self, "tabBar", None) else 0
-        top = D.TITLEBAR_H
+        rail = 0  # 顶部 tab 布局：左侧不再有侧栏，内容区从 x=0 开始
+        top = D.TITLEBAR_H + W.TopBar.HEIGHT
         bottom = rect.height() - (self.statusBar.height()
                                   if getattr(self, "statusBar", None) else 0)
         area = QRectF(rail, top, rect.width() - rail, max(0.0, bottom - top))
@@ -391,7 +393,7 @@ class MainWindow(FluentWindow):
         self.config.set("mica_effect", bool(enabled))
 
     def _apply_theme(self):
-        key = self.config.get("theme", "dark")
+        key = self.config.get("theme", D.DEFAULT_THEME)
         theme = {"dark": Theme.DARK, "light": Theme.LIGHT,
-                 "auto": Theme.AUTO}.get(key, Theme.DARK)
+                 "auto": Theme.AUTO}.get(key, Theme.LIGHT)
         setTheme(theme)

@@ -68,45 +68,21 @@ def with_alpha(color: QColor, alpha: int) -> QColor:
 
 def draw_panel_surface(painter: QPainter, rect: QRectF, radius: float,
                        accent_strength: float = 1.0) -> None:
-    """画一块面板底（三档渐变的画法，全项目共用）：
+    """画一块面板底：纯色 + 1px 中性描边（去掉了第二版里的渐变描边与
+    顶部高光 —— 那一套让每张卡片都"自带光源"，一屏五六张卡片互相打架，
+    也偏离了「简约、不抢戏」的方向）。
 
-    1. 底色：SURFACE → SURFACE_HI 的斜向微渐变。纯色板在近黑画布上会"塌"，
-       一点点渐变就能让边缘和中部拉开层次，且不影响任何文字对比度。
-    2. 描边：沿用 BORDER，但**左上角描到强调色**（斜向渐变描边）。这是整套
-       界面里最"贵"的一笔：静态、无动画、只在边缘出现，却让面板有方向感。
-    3. 顶部高光：内侧 1px 白线（深色 6% / 浅色 90%），模拟受光面。
+    accent_strength 形参保留兼容，但实际不再使用（保留位置参数调用方
+    不用改）。
     """
-    base = col(D.SURFACE)
-    base2 = col(D.SURFACE_HI)
-    grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
-    grad.setColorAt(0.0, blend(base, base2, 0.35))
-    grad.setColorAt(1.0, base)
+    del accent_strength  # 形参保留、语义弃用
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(grad)
+    painter.setBrush(col(D.SURFACE))
     painter.drawRoundedRect(rect, radius, radius)
-
-    # 渐变描边：从左上的强调色 → 右下的常规描边
-    edge = QLinearGradient(rect.topLeft(), rect.bottomRight())
-    edge.setColorAt(0.0, with_alpha(accent(), int(150 * accent_strength)))
-    edge.setColorAt(0.45, col(D.BORDER))
-    edge.setColorAt(1.0, col(D.BORDER))
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.setPen(QPen(edge, 1))
+    painter.setPen(QPen(col(D.BORDER), 1))
     inset = rect.adjusted(0.5, 0.5, -0.5, -0.5)
     painter.drawRoundedRect(inset, radius, radius)
-
-    # 顶部内高光（只在圆角内画一小段，避免像一条白边）
-    hl = with_alpha(QColor("#FFFFFF"),
-                    22 if isDarkTheme() else 140)
-    inner = rect.adjusted(1.5, 1.5, -1.5, -1.5)
-    path = QPainterPath()
-    path.addRoundedRect(inner, max(0.0, radius - 1), max(0.0, radius - 1))
-    painter.save()
-    painter.setClipPath(path)
-    painter.setPen(QPen(hl, 1))
-    painter.drawLine(QPointF(inner.left() + radius, inner.top()),
-                     QPointF(inner.right() - radius, inner.top()))
-    painter.restore()
 
 
 def draw_glow(painter: QPainter, center: QPointF, radius: float,
@@ -512,37 +488,32 @@ class NavItem(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(self.rect()).adjusted(0, 1, 0, -1)
+        rect = QRectF(self.rect()).adjusted(4, 2, -4, -2)
         if self._active:
-            # 选中项：横向渐变底（强调色 14% → 透明），左侧 2px 强调色竖条
-            fill = QLinearGradient(rect.topLeft(), rect.topRight())
-            fill.setColorAt(0.0, with_alpha(accent(), 46 if isDarkTheme() else 30))
-            fill.setColorAt(0.7, with_alpha(accent(), 16 if isDarkTheme() else 10))
-            fill.setColorAt(1.0, with_alpha(accent(), 0))
+            # 选中项：浅色平坦填充（SURFACE_HI），左侧 3px 强调色竖条。
+            # 去掉了第二版的横向渐变 —— 选中态只需要"能被一眼看到"，
+            # 不需要"看起来有光"。
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(fill)
+            painter.setBrush(col(D.SURFACE_HI))
             painter.drawRoundedRect(rect, D.RADIUS_MD, D.RADIUS_MD)
-            bar = QLinearGradient(QPointF(0, rect.top()), QPointF(0, rect.bottom()))
-            bar.setColorAt(0.0, with_alpha(accent(), 200))
-            bar.setColorAt(1.0, with_alpha(accent(), 90))
-            painter.setBrush(bar)
+            painter.setBrush(accent())
             painter.drawRoundedRect(
-                QRectF(rect.left(), rect.top() + 7, 2, rect.height() - 14), 1, 1)
+                QRectF(rect.left() + 1, rect.top() + 8, 3, rect.height() - 16), 1.5, 1.5)
         elif self._hover:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(col(D.BG_HOVER))
             painter.drawRoundedRect(rect, D.RADIUS_MD, D.RADIUS_MD)
 
-        side = 16
-        icon_x = int(rect.left()) + 12
+        side = 15
+        icon_x = int(rect.left()) + 14
         icon_y = int(rect.top()) + (int(rect.height()) - side) // 2
         drawIcon(self._icon, painter, QRect(icon_x, icon_y, side, side))
 
         painter.setPen(col(D.TEXT_PRIMARY if self._active else D.TEXT_SECONDARY))
-        painter.setFont(D.font(D.FONT_BODY,
+        painter.setFont(D.font(D.FONT_BODY - 1,
                                D.W_MEDIUM if self._active else D.W_REGULAR))
-        text_rect = QRect(icon_x + side + 10, int(rect.top()),
-                          max(0, int(rect.width()) - side - 40),
+        text_rect = QRect(icon_x + side + 9, int(rect.top()),
+                          max(0, int(rect.width()) - side - 42),
                           int(rect.height()))
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter, self._text)
 
@@ -600,6 +571,130 @@ class RailDivider(QFrame):
         painter.fillRect(self.rect(), col(D.HAIRLINE_SOFT))
 
 
+class TopTab(QWidget):
+    """顶部标签：纯文字，选中态 = 主色文字 + 底部 2px 强调色下划线。"""
+
+    clicked = Signal(int)
+    HEIGHT = 44
+
+    def __init__(self, text: str, index: int, parent=None, hint: str = ""):
+        super().__init__(parent)
+        self._text = text
+        self._index = index
+        self._active = False
+        self._hover = False
+        self.setFixedHeight(self.HEIGHT)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(hint or text)
+        fm = self.fontMetrics()
+        self.setMinimumWidth(fm.horizontalAdvance(text) + 28)
+        on_theme(self)
+
+    def set_active(self, on: bool) -> None:
+        if bool(on) != self._active:
+            self._active = bool(on)
+            self.update()
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and \
+                self.rect().contains(event.position().toPoint()):
+            self.clicked.emit(self._index)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect()
+        color = col(D.TEXT_PRIMARY) if self._active else (
+            col(D.TEXT_SECONDARY) if self._hover else col(D.TEXT_TERTIARY))
+        painter.setPen(color)
+        painter.setFont(D.font(D.FONT_BODY,
+                               D.W_MEDIUM if self._active else D.W_REGULAR))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._text)
+        if self._active:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(accent())
+            painter.drawRoundedRect(
+                QRectF(rect.left() + 14, rect.bottom() - 1.5,
+                       rect.width() - 28, 2), 1, 1)
+
+
+class TopBar(QWidget):
+    """顶部栏：品牌（左）+ 页面 tab（中）+ 主题切换（右）。
+
+    替换原来的左侧 NavRail。顶部 tab 是 Linear / Notion 那类极简工具的
+    主流组织方式：内容区宽度变满，导航从"占一列"变成"占一行"。
+    """
+
+    currentChanged = Signal(int)
+    HEIGHT = 56
+
+    def __init__(self, items, app_name: str, version: str = "", parent=None):
+        """items: [(icon, 文字)] 或 [(icon, 文字, tooltip)]（icon 形参保留兼容，实际不用）"""
+        super().__init__(parent)
+        self.setFixedHeight(self.HEIGHT)
+        self.setObjectName("topBar")
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(28, 0, 20, 0)
+        lay.setSpacing(0)
+
+        brand = QVBoxLayout()
+        brand.setContentsMargins(0, 0, 0, 0)
+        brand.setSpacing(0)
+        self.appLabel = text_label(app_name, self, D.TEXT_PRIMARY,
+                                   D.FONT_BODY, D.W_SEMI)
+        brand.addWidget(self.appLabel)
+        self.versionLabel = text_label(version, self, D.TEXT_TERTIARY, D.FONT_MICRO)
+        brand.addWidget(self.versionLabel)
+        lay.addLayout(brand)
+        lay.addSpacing(28)
+
+        self.items = []
+        for i, item in enumerate(items):
+            text = item[1]
+            hint = item[2] if len(item) > 2 else ""
+            tab = TopTab(text, i, self, hint=hint)
+            tab.clicked.connect(self._on_clicked)
+            lay.addWidget(tab)
+            self.items.append(tab)
+
+        lay.addStretch(1)
+
+        self.themeButton = RailTool(FIF.CONSTRACT, "切换浅色 / 深色主题", self)
+        self.themeButton.setFixedSize(32, 32)
+        lay.addWidget(self.themeButton, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.set_current(0)
+        on_theme(self)
+
+    def set_current(self, index: int) -> None:
+        for i, item in enumerate(self.items):
+            item.set_active(i == index)
+
+    def count(self) -> int:
+        return len(self.items)
+
+    def set_hint(self, text: str) -> None:
+        """兼容 NavRail 的接口（顶部栏没有 hint 位，忽略）"""
+
+    def _on_clicked(self, index: int) -> None:
+        if 0 <= index < len(self.items) and not self.items[index]._active:
+            self.currentChanged.emit(index)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), col(D.SURFACE))
+        painter.setPen(col(D.BORDER))
+        painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+
 class NavRail(QWidget):
     """左侧导航栏：品牌块 + 页面列表 + 底部工具。
 
@@ -609,7 +704,7 @@ class NavRail(QWidget):
     """
 
     currentChanged = Signal(int)
-    WIDTH = 208
+    WIDTH = 188
 
     def __init__(self, items, app_name: str, version: str = "", parent=None):
         """items: [(icon, 文字)] 或 [(icon, 文字, tooltip)]"""
@@ -624,23 +719,21 @@ class NavRail(QWidget):
 
         brand = QHBoxLayout()
         brand.setContentsMargins(4, 0, 0, 0)
-        brand.setSpacing(9)
-        self.brandIcon = IconBadge(FIF.VIDEO, self, 30, 16)
-        brand.addWidget(self.brandIcon, 0, Qt.AlignmentFlag.AlignVCenter)
+        brand.setSpacing(0)
+        # 去掉品牌图标徽章：侧栏已经有 8 个图标，再加一个"应用图标"
+        # 会让品牌块变成第九个按钮（视觉上）。纯文字就够。
         brandText = QVBoxLayout()
         brandText.setContentsMargins(0, 0, 0, 0)
         brandText.setSpacing(0)
         self.appLabel = text_label(app_name, self, D.TEXT_PRIMARY,
-                                   D.FONT_BODY, D.W_SEMI)
+                                   D.FONT_BODY + 1, D.W_SEMI)
         brandText.addWidget(self.appLabel)
         self.versionLabel = text_label(version, self, D.TEXT_TERTIARY, D.FONT_MICRO)
         brandText.addWidget(self.versionLabel)
         brand.addLayout(brandText)
         brand.addStretch(1)
         lay.addLayout(brand)
-        lay.addSpacing(14)
-        lay.addWidget(text_label("工作区", self, D.TEXT_TERTIARY, D.FONT_MICRO))
-        lay.addSpacing(2)
+        lay.addSpacing(10)
 
         self.items = []
         for i, item in enumerate(items):
@@ -785,10 +878,10 @@ class _AccentBar(QWidget):
 
 
 class GradientTitle(QLabel):
-    """渐变标题文字：主色 → 主色与强调色的混合。
+    """页头标题：实色文字（类名保留以兼容现有调用方）。
 
-    标题是每屏唯一的"大字"，给它一点点色彩过渡就够撑起整页的气质；
-    再往上（发光、描边、动画）就变成营销页了，工具界面不需要。
+    去掉了第二版的"主色 → 强调色"文字渐变 —— 字本身就是信息，
+    不需要额外的色块来撑气质。
     """
 
     def __init__(self, text: str, parent=None, size: int = D.FONT_TITLE,
@@ -801,13 +894,9 @@ class GradientTitle(QLabel):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        font = self.font()
-        painter.setFont(font)
+        painter.setFont(self.font())
         rect = self.rect()
-        grad = QLinearGradient(QPointF(rect.left(), 0), QPointF(rect.right(), 0))
-        grad.setColorAt(0.0, col(D.TEXT_PRIMARY))
-        grad.setColorAt(1.0, blend(col(D.TEXT_PRIMARY), accent(), 0.75))
-        painter.setPen(QPen(grad, 1))
+        painter.setPen(col(D.TEXT_PRIMARY))
         metrics = painter.fontMetrics()
         text = metrics.elidedText(self.text(), Qt.TextElideMode.ElideRight,
                                   rect.width())
@@ -827,12 +916,9 @@ class PageHeading(QWidget):
         super().__init__(parent)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(10)
-        # 页头左侧 3px 渐变小竖条：与侧栏选中条同一种语言，
-        # 让"这一页属于哪个工作区"在视线起点就有落点
-        self.bar = _AccentBar(self)
-        lay.addWidget(self.bar, 0, Qt.AlignmentFlag.AlignTop)
-
+        lay.setSpacing(0)
+        # 页头左侧不再放渐变小竖条 —— 它跟侧栏选中条是两种语境，
+        # 放一起会让"强调"贬值（装饰性元素第二轮已被识别为冗余）。
         text = QVBoxLayout()
         text.setContentsMargins(0, 0, 0, 0)
         text.setSpacing(3)

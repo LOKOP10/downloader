@@ -40,9 +40,9 @@ CARD_GAP = 12          # 卡片内部块与块的间隔
 # --------------------------------------------------------------------- 圆角
 # 四档圆角，尺度对齐 Tailwind 的 rounded-sm/md/lg/xl。
 RADIUS_SM = 6          # 徽章、标签这类小控件
-RADIUS_MD = 8          # 按钮、输入框
-RADIUS_LG = 12         # 卡片、面板
-RADIUS_XL = 16         # 大容器、对话框
+RADIUS_MD = 10         # 按钮、输入框
+RADIUS_LG = 14         # 卡片、面板
+RADIUS_XL = 18         # 大容器、对话框
 
 # --------------------------------------------------------------------- 标题栏
 # 32px 高（Tailwind h-8）、右侧三个 48px 宽按钮（w-12）。
@@ -111,14 +111,14 @@ DANGER = ("#C42B36", "#F2727C")
 # 背景三级 + 交互态（primary=页底 / secondary=面板 / tertiary=内层 / hover·active=交互）。
 # 层次规则：页面底 = primary，卡片/面板/标题栏 = secondary，
 # 再往里一层（输入框、内嵌块）= tertiary。
-BG_PRIMARY = ("#FAFAFA", "#09090B")
+BG_PRIMARY = ("#F7F7F8", "#0E0F12")
 BG_SECONDARY = ("#FFFFFF", "#18181B")
 BG_TERTIARY = ("#F4F4F5", "#27272A")
 BG_HOVER = ("#E4E4E7", "#3F3F46")
 BG_ACTIVE = ("#D4D4D8", "#52525B")
 
 # 边框两级（default=常规描边 / strong=强调描边）
-BORDER = ("#E4E4E7", "#27272A")
+BORDER = ("#E5E5E8", "#26272C")
 BORDER_STRONG = ("#D4D4D8", "#3F3F46")
 
 # --------------------------------------------------------------------- 工作台层次
@@ -127,8 +127,8 @@ BORDER_STRONG = ("#D4D4D8", "#3F3F46")
 #   面板 = 内容块（SURFACE），1px 描边 + 12px 圆角
 #   板内 = 面板里再分块（SURFACE_HI），用于表头、输入槽、选中行
 # 之前只有「卡片 = 5% 白叠加」这一档，导致所有内容都长成同一张卡（同构即噪声）。
-SURFACE = ("#FFFFFF", "#111114")
-SURFACE_HI = ("#F7F7F8", "#191A1E")
+SURFACE = ("#FFFFFF", "#16171B")
+SURFACE_HI = ("#F4F4F5", "#1E2025")
 HAIRLINE_SOFT = ("#F0F0F1", "#1E1F23")
 
 # 行高（px）：设置行 / 导航项 / 任务行。固定值而不是自适应，保证列表节奏一致。
@@ -505,3 +505,6 @@ def icon_group(parent=None, gap: int = GAP_XS) -> QHBoxLayout:
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(gap)
     return lay
+
+# 默认主题：浅色（深色下仍保留，但默认更"简约明亮"）
+DEFAULT_THEME = "light"
