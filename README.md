@@ -1,6 +1,6 @@
 # 视频下载器
 
-个人自用的多站点视频 / 图片下载工具，分 Windows 桌面端（Python + PySide6）和 Android 端（Kotlin + Compose）。
+个人自用的多站点视频 / 图片下载工具，分 Windows 桌面端（Python + PySide6）和 Android 端（Flutter，见 `flutter_app/`）。
 
 仅供个人学习与备份使用。
 
@@ -14,16 +14,15 @@
 | X (Twitter) | 敏感内容推文需填 `auth_token` / `ct0` |
 | Instagram | 需登录的内容要填 Cookie |
 | YouTube | 高画质为音视频分离，需 ffmpeg 合并；需能访问 YouTube |
-| Iwara | |
-| Pornhub | |
-| hanime1 | |
+| Iwara | 纯 HTTP（`X-Version` 签名取 Source / 540 / 360 档），免登录 |
+| Pornhub | 纯 HTTP（播放页 flashvars）；⚠️ 2026-10 起站点只发 HLS，桌面端目前只到解析层 |
+| hanime1 | 纯 HTTP + curl_cffi 指纹（站点认 TLS），免登录，页面无时长字段 |
 | 禁漫天堂 | 种子号解析 |
 
-> 上表是**桌面端**的完整列表。安卓端目前只少 YouTube；Iwara / Pornhub / hanime1 已补上（桌面端同一套 HTTP 链路）。
+> 上表是**桌面端**的完整列表。Android 端（`flutter_app/`，Flutter 重做版）少一个 YouTube，
+> 其余站点都已接入；Iwara / Pornhub / hanime1 与桌面端同一套 HTTP 链路。
 >
-> 仍有一处差异：**抖音图文里的动图（Live Photo）转 GIF** 只有桌面端支持。安卓端在 WebView 里
-> 拿不到抖音的作品详情（页面只下发 SSR 骨架、不触发 `/aweme/v1/web/aweme/detail/` 请求，
-> hook 状态恒为 `cap:0`，登录态、视口与指纹都试过），因此安卓端只保存静态图。
+> 仍有一处差异：**抖音图文里的动图（Live Photo）转 GIF** 只有桌面端支持（安卓端只保存静态图）。
 
 ## 目录结构
 
@@ -65,13 +64,17 @@
 │   ├── requirements.txt
 │   └── config.json             # 运行时配置（首次运行自动生成）
 │
-└── android/                    # Android 端（Kotlin + Jetpack Compose）
-    └── app/src/main/java/com/xd/vdl/
-        ├── core/
-        │   ├── parse/          # 各站点解析器（与桌面端同一套思路）
-        │   ├── download/       # 下载、分段、音视频合并、媒体库导出
-        │   └── net/            # HTTP 与 Cookie 管理
-        └── ui/                 # Compose 界面
+└── flutter_app/                # Android 端（Flutter 重写版）
+    ├── lib/
+    │   ├── features/parse/     # 各站点解析器（抖音/小红书/B站/X/Iwara/Pornhub/hanime1）
+    │   ├── features/download/  # 多连接下载、HLS 分片、DASH 合并、任务队列
+    │   ├── features/manga/     # 禁漫接口、切片重排、书架与本地漫画阅读器
+    │   ├── features/library/   # 书架页
+    │   ├── features/settings/  # 设置页
+    │   └── shared/             # 站点枚举、链接识别、HTTP（含 Cloudflare 专用 browser_http）
+    ├── test/                   # 离线单测 / 组件测试
+    ├── tool/                   # 端到端实测脚本（check_*.dart）
+    └── android/                # Flutter 的 Android 工程（Kotlin 桥：Muxer / 图片重排 / MediaStore）
 ```
 
 仓库只提交源码。`dist/`、`build/`、`.venv/`、`edge_profile/`、`*.exe`、`*.apk` 等构建产物和敏感目录都在 `.gitignore` 里，需要自行构建。
@@ -266,76 +269,43 @@ python -m unittest discover -s tests -p "test_manga*.py" -v
 
 `config.json` 里会存 Cookie，不要提交到公开仓库。
 
-## Android 端
+## Android 端（Flutter 重做版，`flutter_app/`）
+
+原来的 Kotlin + Jetpack Compose 版本已从仓库移除，安卓端统一用 Flutter 重写 ——
+实现细节、站点能力与踩坑记录见 **`flutter_app/README.md`**。
 
 ### 环境要求
 
+- Flutter 3.47（Dart 3.13）
 - Android SDK 34（`compileSdk` / `targetSdk` = 34，`minSdk` = 24，即 Android 7.0+）
-- JDK 17
-- Gradle 8.7（用仓库自带的 `gradlew` 即可）
-
-首次构建前，在 `android/local.properties` 里指定 SDK 路径：
-
-```properties
-sdk.dir=C\:\\Users\\<你的用户名>\\AppData\\Local\\Android\\Sdk
-```
+- JDK 17+
 
 ### 构建
 
 ```bash
-cd android
-./gradlew assembleDebug          # Windows 用 gradlew.bat
+cd flutter_app
+flutter pub get
+flutter build apk --release     # 产物：build/app/outputs/flutter-apk/app-release.apk
 ```
 
-APK 输出在 `android/app/build/outputs/apk/`。
+包名 `com.xd.vdl.flutter`（与已移除的旧 Kotlin 版 `com.xd.vdl` 不同，两者可共存安装）。
 
-### 使用
+### 能力概览
 
-- 主要入口是系统分享：在抖音 / B 站 / 小红书等 App 里点「分享 → 视频下载器」。
-- 界面是 Compose，分首页、任务列表、书架、设置四页。
-- 下载完成后通过 MediaStore 导出到系统相册。
-- Cookie 按平台分开存；B站可在设置里使用「网页登录（自动保存登录态）」，完成官方页面登录并通过服务端校验后保存，无需手动复制。
-- B站登录不改变视频本身及账号会员画质权限；其他平台仍支持手动填写Cookie。
-
-### 本地漫画书架（离线阅读）
-
-下载完成的**漫画类产物会自动进入「书架」**，之后即使断网、原漫画源失效、登录态过期，
-也能在应用内直接打开阅读，不依赖任何在线接口。
-
-- **自动入库**：禁漫本子（整本 zip）与图集（多张图片）在下载**成功之后**入库；失败、取消、
-  只下了一部分都不会留下记录。视频下载不会进书架。
-- **入口**：底部「书架」页；下载任务卡片上的「去书架阅读（可离线）」按钮可直达。
-- **离线读取**：压缩包首次打开时解包到应用缓存并落一份 manifest，之后翻页只读缓存文件；
-  阅读全程不发任何网络请求，标题、页序、章节结构都来自本地记录。
-- **阅读进度**：翻页停稳后写入 `filesDir/manga_library.json`（原子替换 + 保留 `.bak` 备份），
-  重进应用、重启手机都能回到上次那一页；同一本书重复下载不会覆盖你的标题、收藏与进度。
-- **移除可自选**：书架上的「移除」会让你选择 —— 「仅移除书架」（文件保留，可逆）或
-  「移除并删文件」（永久删除，需二次确认）。删除只针对这一本登记的文件，绝不递归删目录、
-  也不碰其它漫画。
-- **扫描找回**：右上角刷新按钮会扫描本应用的压缩包下载目录，把还不在书架里的压缩包补进来
-  （应用重装、书架文件丢失、手动往下载目录丢本子都能找回）。
-- 页序按**自然排序**，与桌面端 `app/core/manga.py` 的 `natural_key` 逐条等价 ——
-  `第2章/2.jpg` 排在 `第2章/10.jpg`、`第10章/1.jpg` 之前。
-- 缓存清理：书架页底部显示阅读缓存占用，可一键清理（不影响漫画文件本身）。
-
-⚠️ **不提供「选择任意文件夹添加漫画」**：Android 10+ 分区存储下读任意目录必须走 SAF，
-会给应用引入一套新的持久化授权机制；本应用产生的内容都在自己写的目录里，用「扫描下载目录」即可覆盖。
-在 Android 9 及以下，扫描公共下载目录需要 `READ_EXTERNAL_STORAGE`，本应用**不申请**该权限，
-因此那里会明确提示无法扫描（已下载的漫画仍可从任务页打开），而不是弹权限框。
-
-相关测试：
-
-```bash
-cd android
-./gradlew.bat testDebugUnitTest   # 含 core/manga 下的排序、存储、解包与离线链路测试
-```
+- **站点**：抖音、小红书、B 站、X、Iwara、Pornhub、hanime1、禁漫（YouTube 仅桌面端）。
+- **解析全走纯 HTTP**：抖音不依赖 WebView；Iwara / hanime1 / Pornhub 的 HLS CDN 在 Cloudflare 后面，
+  走 `lib/shared/net/browser_http.dart`（裸 TLS + Chrome 头序），`HttpClient` 会被 403/410。
+- **下载**：多连接分段；B 站 DASH 用原生 MediaMuxer 合并；Pornhub 目前只有 HLS，按分片下载拼成 `.ts`。
+- **保存位置**：设置里可用系统文件管理器选目录（SAF），也可手填绝对路径；视频/图片与漫画是两套配置。
+- **书架**：本地漫画（zip / 图片文件夹）离线阅读，进度持久化，预览整本连续下滑，支持「保存到相册」。
+- **测试**：`flutter test`（离线单测 + 组件测试，当前 150 项）。
 
 ## 几点说明
 
 - Cookie 在桌面端明文存在 `config.json`，安卓端存在 `SharedPreferences`（`vdl_cookies`），都不加密。
 - 桌面端用 Playwright 驱动本机 Edge 时会生成 `edge_profile*/`（每个平台一个），里面是登录态，已在 `.gitignore` 排除。
   新增平台时记得同步 `core/config.py` 的属性与 `installer/setup.iss` 卸载逻辑，否则卸载后会残留登录凭据。
-- `JmClient.kt` / `jmcomic_bridge.py` 里的 `SECRET`（如 `185Hcomic3PAPP7R`）是该 App 通信协议的公开逆向常量，不是个人凭据。
+- 禁漫的 `SECRET`（如 `185Hcomic3PAPP7R`，见 `lib/features/manga/data/jm_client.dart` 与 `jmcomic_bridge.py`）是该 App 通信协议的公开逆向常量，不是个人凭据。
 - 桌面端支持多连接分段下载；若需要代理的站点报 `CONNECT tunnel failed, response 502`，
   多半是本地代理端口变了而系统代理没跟着更新 —— `core/proxy.py` 会自动探测可用端口。
 

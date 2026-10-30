@@ -132,6 +132,9 @@ Desktop.ini
 # wrangler 在部署目录留下的本地缓存，不是站点内容
 website/.wrangler/
 
+# ---------- Flutter 工具运行态 ----------
+.flutter_tool_state
+
 # ---------- 运行时状态（非源码）----------
 # DSH 相关组件在仓库根写入的设备标识等运行态数据
 /.local/
