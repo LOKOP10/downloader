@@ -246,4 +246,49 @@ void main() {
       expect(name, contains('_001.jpg'));
     });
   });
+
+  group('禁漫镜像测速排序', () {
+    const all = ['a.cc', 'b.cc', 'c.net', 'd.net'];
+
+    test('测到的按延迟升序在前', () {
+      final ranked = rankDomainsByLatency(all, {
+        'c.net': 120,
+        'a.cc': 800,
+        'b.cc': 300,
+      });
+      expect(ranked, ['c.net', 'b.cc', 'a.cc', 'd.net']);
+    });
+
+    test('一个都没测到时保持原顺序', () {
+      expect(rankDomainsByLatency(all, {}), all);
+    });
+
+    test('测速结果里出现列表外的域名时忽略（不崩、不混入）', () {
+      final ranked = rankDomainsByLatency(['a.cc'], {'zzz.cc': 1, 'a.cc': 50});
+      expect(ranked, ['a.cc']);
+    });
+
+    test('相同延迟保持稳定（不抖动）', () {
+      final ranked = rankDomainsByLatency(all, {'a.cc': 100, 'b.cc': 100});
+      expect(ranked.take(2).toSet(), {'a.cc', 'b.cc'});
+      expect(ranked.sublist(2), ['c.net', 'd.net']);
+    });
+  });
+
+  group('书架封面不能落进相册', () {
+    test('封面用隐藏文件名（系统扫描器会跳过）', () {
+      final file = MangaLibrary.coverFileFor('/sdcard/Pictures/漫画/某本.zip');
+      expect(file.path, '/sdcard/Pictures/漫画/.某本.cover.jpg');
+    });
+
+    test('非 zip（图片文件夹）的封面也隐藏', () {
+      final file = MangaLibrary.coverFileFor('/sdcard/Pictures/漫画/某本');
+      expect(file.path, '/sdcard/Pictures/漫画/.某本.cover.jpg');
+    });
+
+    test('旧版可见封面名仍能定位（供迁移读取）', () {
+      final legacy = MangaLibrary.legacyCoverFileFor('/a/书.zip');
+      expect(legacy.path, '/a/书.cover.jpg');
+    });
+  });
 }

@@ -7,6 +7,9 @@ import 'package:vdl/features/download/data/download_location.dart';
 import 'package:vdl/features/download/download_engine.dart';
 import 'package:vdl/features/download/hls_downloader.dart';
 import 'package:vdl/features/download/media_muxer.dart';
+import 'package:vdl/features/download/data/download_settings.dart';
+import 'package:vdl/shared/download_keepalive.dart';
+import 'package:vdl/shared/media_saver.dart';
 import 'package:vdl/shared/net/http.dart';
 import 'package:vdl/shared/site.dart';
 import 'package:vdl/features/download/task_model.dart';
@@ -69,8 +72,105 @@ class TaskStore extends ChangeNotifier {
 
   final List<DownloadJob> jobs = [];
 
-  /// 并发连接数（设置页可改）。
-  int connections = 4;
+  /// 每个文件的并发分段数（设置页可改，默认 8）。
+  int connections = DownloadSettings.defaultConnections;
+
+  bool _settingsLoaded = false;
+
+  /// 首次下载前把持久化的并发数读回来（设置页改动会直接覆盖这里）。
+  Future<void> ensureSettings() async {
+    if (_settingsLoaded) return;
+    _settingsLoaded = true;
+    connections = DownloadSettings.clampConnections(
+        await DownloadSettings.loadConnections());
+  }
+
+  // ---------------- 后台保活 ----------------
+
+  /// 上一次推给前台服务的文案（null = 当前没有保活服务）。
+  String? _keepAliveText;
+
+  /// 正在跑或排队中的任务数。
+  int get activeCount => jobs
+      .where((j) => j.status == TaskStatus.running || j.status == TaskStatus.waiting)
+      .length;
+
+  /// 任务状态一变就同步前台服务。
+  ///
+  /// 旧问题是「一切到后台下载就断」：Dart 的下载循环被系统挂起。有任务时挂上
+  /// 前台服务（带常驻通知），进程保持前台优先级；任务全部结束就撤掉，不留空通知。
+  @override
+  void notifyListeners() {
+    _syncKeepAlive();
+    super.notifyListeners();
+  }
+
+  /// 上一次推进通知的百分比（null = 进度不可知）。
+  int? _keepAlivePercent;
+
+  /// 上一次推进通知的时间，用来节流（通知栏一秒刷几十次既费电又闪）。
+  DateTime _keepAliveAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _syncKeepAlive() {
+    final active = activeCount;
+    if (active <= 0) {
+      if (_keepAliveText != null) {
+        _keepAliveText = null;
+        _keepAlivePercent = null;
+        unawaited(DownloadKeepAlive.stop());
+      }
+      return;
+    }
+
+    // 汇总正在跑的任务：总进度 = Σ已收字节 / Σ总字节；只要有一个任务拿不到总长度
+    // 就退化成不确定进度条（否则百分比会忽大忽小）。
+    var received = 0;
+    var total = 0;
+    var speed = 0.0;
+    var unknown = false;
+    for (final job in jobs) {
+      if (job.status != TaskStatus.running && job.status != TaskStatus.waiting) {
+        continue;
+      }
+      final progress = job.progress;
+      if (progress == null || progress.total <= 0) {
+        unknown = true;
+        continue;
+      }
+      received += progress.received;
+      total += progress.total;
+      speed += progress.speed;
+    }
+    final percent = (!unknown && total > 0)
+        ? ((received * 100) / total).round().clamp(0, 100)
+        : null;
+
+    final buffer = StringBuffer('正在下载 ');
+    buffer.write(active.toString());
+    buffer.write(' 个任务');
+    if (percent != null) {
+      buffer.write(' · ');
+      buffer.write(percent.toString());
+      buffer.write('%');
+    }
+    if (speed > 0) {
+      buffer.write(' · ');
+      buffer.write(DownloadProgress.sizeText(speed.round()));
+      buffer.write('/s');
+    }
+    final text = buffer.toString();
+
+    final now = DateTime.now();
+    final samePercent = percent == _keepAlivePercent;
+    final tooSoon = now.difference(_keepAliveAt).inMilliseconds < 900;
+    if (text == _keepAliveText && samePercent) return;
+    if (samePercent && tooSoon) return;
+
+    _keepAliveText = text;
+    _keepAlivePercent = percent;
+    _keepAliveAt = now;
+    unawaited(DownloadKeepAlive.start(text, percent: percent));
+  }
 
   /// 图集下载串行链（见 startGallery）。
   Future<void> _galleryChain = Future<void>.value();
@@ -80,6 +180,7 @@ class TaskStore extends ChangeNotifier {
   /// 下载目录：跟随设置（默认应用外部目录），每次下载前重新解析一次，
   /// 这样用户在设置里改完立刻生效。
   Future<String> ensureDir() async {
+    await ensureSettings();
     final path = await DownloadLocation.current();
     if (_downloadDir != path) {
       await Directory(path).create(recursive: true);
@@ -220,6 +321,9 @@ class TaskStore extends ChangeNotifier {
           },
         );
       }
+      // 落到公共目录时通知系统媒体库：不加这一步，相册有时能自己遍历到，
+      // 但 QQ / 微信的「最近图片」只查 MediaStore —— 会看不到刚下载的文件
+      unawaited(MediaSaver.scanToGallery(target.path));
       job.status = TaskStatus.done;
     } on DownloadCancelled {
       job.status = TaskStatus.failed;

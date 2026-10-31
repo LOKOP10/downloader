@@ -9,6 +9,10 @@
     <!-- API 28 及以下往相册插图片需要它（29+ 走 MediaStore 分区存储，不需要） -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"/>
+    <!-- 后台下载保活：前台服务 + 常驻通知（Android 14 起必须声明 dataSync 类型） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <application
         android:label="视频下载器"
@@ -37,6 +41,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- 下载保活：有任务时前台运行（带通知），切后台/锁屏不中断 -->
+        <service
+            android:name=".DownloadKeepAliveService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false"/>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -10,6 +10,7 @@ import 'package:vdl/design/widgets/platform_style.dart';
 import 'package:vdl/features/settings/data/account_store.dart';
 import 'package:vdl/features/settings/ui/widgets/login_dialog.dart';
 import 'package:vdl/features/download/data/download_location.dart';
+import 'package:vdl/features/download/data/download_settings.dart';
 import 'package:vdl/features/manga/data/jm_preview_cache.dart';
 import 'package:vdl/features/manga/data/manga_location.dart';
 import 'package:vdl/features/download/task_store.dart';
@@ -18,6 +19,7 @@ import 'package:vdl/features/settings/ui/widgets/platform_grid.dart';
 import 'package:vdl/features/settings/ui/widgets/save_location_dialog.dart';
 import 'package:vdl/features/parse/parser_registry.dart';
 import 'package:vdl/shared/app_log.dart';
+import 'package:vdl/shared/media_saver.dart';
 import 'package:vdl/shared/site.dart';
 
 /// 设置页：下载 / 账号 / 外观 / 关于。分组卡片 + 52dp 列表行。
@@ -50,6 +52,25 @@ class _SettingsPageState extends State<SettingsPage> {
     final bytes = await JmPreviewCache.sizeBytes();
     if (!mounted) return;
     setState(() => _previewCacheText = _sizeText(bytes));
+  }
+
+  /// 把「视频 / 图片保存位置」里已有的文件重新登记进系统媒体库。
+  ///
+  /// 以前下载时没登记 MediaStore，文件在相册可能可见、但在 QQ / 微信的
+  /// 「最近图片」里看不到；这一项不用重下载，直接补登记。
+  Future<void> _rescanMedia() async {
+    final dir = await DownloadLocation.current();
+    if (!mounted) return;
+    if (!MediaSaver.isPublicMediaPath(dir)) {
+      _toast('当前保存位置在应用私有目录（Android/data），别的 App 读不到，换成公共目录才行');
+      return;
+    }
+    _toast('正在登记…');
+    final count = await MediaSaver.scanDirectoryToGallery(dir);
+    if (!mounted) return;
+    _toast(count > 0
+        ? '已登记 ' + count.toString() + ' 个文件到媒体库（相册 / QQ 现在应该能看到）'
+        : '目录里没有可登记的视频/图片：' + dir);
   }
 
   Future<void> _clearPreviewCache() async {
@@ -111,9 +132,10 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             AppListTile(
               icon: Icons.tune,
-              title: '同时下载数',
-              trailingText: '3',
-              onTap: () => _toast('调整并发数（待接入）'),
+              title: '并发分段数',
+              subtitle: '单文件切几段同时下载，增大一般更快（4~16）',
+              trailingText: TaskStore.instance.connections.toString(),
+              onTap: _editConnections,
             ),
             AppListTile(
               icon: Icons.drive_file_rename_outline,
@@ -127,6 +149,13 @@ class _SettingsPageState extends State<SettingsPage> {
               value: _downloadCover,
               showDivider: true,
               onChanged: (v) => setState(() => _downloadCover = v),
+            ),
+            AppListTile(
+              icon: Icons.refresh,
+              title: '重新登记到媒体库',
+              subtitle: '让相册 / QQ / 微信的「最近图片」能看到已下载的文件',
+              trailingText: '执行',
+              onTap: _rescanMedia,
             ),
             AppListTile(
               icon: Icons.cleaning_services_outlined,
@@ -248,6 +277,46 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   /// 漫画压缩包目录（`manga.dir`），与视频目录完全独立。
+  /// 并发分段数：4 / 8 / 12 / 16，改完立即生效（下一个任务开始分段时用新值）。
+  Future<void> _editConnections() async {
+    final current = TaskStore.instance.connections;
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Text('单文件并发分段数', style: TextStyle(fontSize: 14)),
+            ),
+            for (final value in DownloadSettings.options)
+              ListTile(
+                title: Text(value.toString() + ' 段'),
+                trailing: value == current
+                    ? const Icon(Icons.check, size: 18)
+                    : null,
+                onTap: () => Navigator.of(sheetContext).pop(value),
+              ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 4, 20, 16),
+              child: Text(
+                '单连接被限速时（如 Iwara）调大明显更快；站点限流强或手机发热时调小更稳',
+                style: TextStyle(fontSize: 11),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null) return;
+    TaskStore.instance.connections = picked;
+    await DownloadSettings.saveConnections(picked);
+    if (!mounted) return;
+    setState(() {});
+    _toast('已改为 ' + picked.toString() + ' 段，从下一个任务开始生效');
+  }
+
   Future<void> _editMangaPath() async {
     final current = await MangaLocation.current();
     if (!mounted) return;

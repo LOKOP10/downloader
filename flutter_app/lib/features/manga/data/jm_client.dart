@@ -19,19 +19,25 @@ class JmClient {
       'AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 '
       'Chrome/91.0.4472.114 Safari/537.36';
 
+  /// 接口镜像。顺序按 2026-10 实测延迟排（快的在前），拿到第一个能用的就记住。
   static const apiDomains = <String>[
-    'www.cdnhjk.net',
-    'www.cdngwc.cc',
     'www.cdngwc.net',
+    'www.cdnhjk.net',
     'www.cdngwc.club',
+    'www.cdngwc.cc',
   ];
 
+  /// 图片镜像（2026-10 实测全部可连；`.jmapinodeudzn.com` / `.jmtezrspp.com`
+  /// / `cdnmhws*.cc` 那批已经 DNS 解析失败，不放进来了）。
+  ///
+  /// 顺序只是兜底顺序；真正下载前会用 [probeImageDomains] 实测延迟再按快慢排。
   static const imageDomains = <String>[
     'cdn-msp.jmapiproxy1.cc',
     'cdn-msp.jmapiproxy2.cc',
     'cdn-msp2.jmapiproxy2.cc',
     'cdn-msp3.jmapiproxy2.cc',
     'cdn-msp.jmapinodeudzn.net',
+    'cdn-msp2.jmapinodeudzn.net',
     'cdn-msp3.jmapinodeudzn.net',
   ];
 
@@ -46,6 +52,47 @@ class JmClient {
   ];
 
   String _liveDomain = '';
+
+  /// 各图片镜像的实测延迟（毫秒）。只在本进程内有效，App 重启后重新测。
+  static final Map<String, int> _imageLatency = <String, int>{};
+
+  /// 是否已经测过速（下载器据此决定要不要先测一测）。
+  bool get imageSpeedProbed => _imageLatency.isNotEmpty;
+
+  /// 按实测延迟排好的图片域名（没测到的按原顺序排在最后）。
+  static List<String> rankedImageDomains() =>
+      rankDomainsByLatency(imageDomains, _imageLatency);
+
+  /// 并发测速：对每个镜像取图片首字节，只测还没测过的。
+  ///
+  /// 为什么值得花这一两秒：禁漫各镜像延迟能差 2~3 倍，一本百页的图是逐张下的，
+  /// 选错镜像等于每页都多等一次 RTT。
+  Future<void> probeImageDomains(String chapterId, String filename) async {
+    final todo =
+        imageDomains.where((d) => !_imageLatency.containsKey(d)).toList();
+    if (todo.isEmpty) return;
+    await Future.wait(todo.map((domain) async {
+      final client = _newClient();
+      final sw = Stopwatch()..start();
+      try {
+        final request = await client
+            .getUrl(Uri.parse(imageUrl(chapterId, filename, domain)));
+        request.headers.set('user-agent', uaApp);
+        request.headers.set('referer', 'https://' + liveDomain + '/');
+        request.headers.set('Range', 'bytes=0-0');
+        final response =
+            await request.close().timeout(const Duration(seconds: 8));
+        await response.drain<void>();
+        if (response.statusCode == 200 || response.statusCode == 206) {
+          _imageLatency[domain] = sw.elapsedMilliseconds;
+        }
+      } catch (_) {
+        // 测不通就不记 —— 排序时自然排到后面
+      } finally {
+        client.close(force: true);
+      }
+    }));
+  }
 
   String get liveDomain => _liveDomain.isEmpty ? apiDomains.first : _liveDomain;
 
@@ -284,9 +331,16 @@ class JmClient {
     String filename, {
     int startIndex = 0,
   }) async {
+    final ranked = rankedImageDomains();
+    // 测过速就主要用最快的两个（既快又少画质抖动），失败再按顺序降级
+    final pool = _imageLatency.isNotEmpty && ranked.length >= 2
+        ? ranked.take(2).toList()
+        : ranked;
     Object? lastError;
-    for (var i = 0; i < imageDomains.length; i++) {
-      final domain = imageDomains[(startIndex + i) % imageDomains.length];
+    for (var i = 0; i < ranked.length; i++) {
+      final domain = i < pool.length
+          ? pool[(startIndex + i) % pool.length]
+          : ranked[i];
       final client = _newClient();
       try {
         final request =
@@ -362,4 +416,21 @@ class JmAlbum {
   String get pageText => multiChapter
       ? chapters.length.toString() + ' 章 · 共 ' + totalPhotos.toString() + ' 页'
       : totalPhotos.toString() + ' 页';
+}
+
+/// 按实测延迟排序：测到的按毫秒升序在前，没测到的保持原顺序排在最后。
+///
+/// 抽成顶层纯函数是为了能离线单测（真实测速要联网）。
+List<String> rankDomainsByLatency(List<String> domains, Map<String, int> latency) {
+  final measured = <String>[];
+  final unknown = <String>[];
+  for (final domain in domains) {
+    if (latency.containsKey(domain)) {
+      measured.add(domain);
+    } else {
+      unknown.add(domain);
+    }
+  }
+  measured.sort((a, b) => latency[a]!.compareTo(latency[b]!));
+  return [...measured, ...unknown];
 }
