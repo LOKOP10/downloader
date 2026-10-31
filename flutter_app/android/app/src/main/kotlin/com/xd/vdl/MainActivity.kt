@@ -23,6 +23,27 @@ class MainActivity : FlutterActivity() {
         registerMuxer(flutterEngine)
         registerDescramble(flutterEngine)
         registerMedia(flutterEngine)
+        registerKeepAlive(flutterEngine)
+    }
+
+    /** 下载保活：起/停前台服务（切后台不被系统挂起）。 */
+    private fun registerKeepAlive(flutterEngine: FlutterEngine) {
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_KEEPALIVE)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> {
+                        val text = call.argument<String>("text") ?: "正在下载"
+                        val progress = call.argument<Int>("progress") ?: -1
+                        DownloadKeepAliveService.startOrUpdate(this, text, progress)
+                        result.success(true)
+                    }
+                    "stop" -> {
+                        DownloadKeepAliveService.stop(this)
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     private fun registerMuxer(flutterEngine: FlutterEngine) {
@@ -84,6 +105,19 @@ class MainActivity : FlutterActivity() {
                             }.start()
                         }
                     }
+                    "scanFiles" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val paths = call.argument<List<String>>("paths") ?: emptyList()
+                        Thread {
+                            try {
+                                val count = MediaStoreBridge.scanFiles(this, paths)
+                                mainHandler.post { result.success(count) }
+                            } catch (error: Exception) {
+                                val message = error.message ?: error.javaClass.simpleName
+                                mainHandler.post { result.error("scan_failed", message, null) }
+                            }
+                        }.start()
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -119,5 +153,6 @@ class MainActivity : FlutterActivity() {
         private const val CHANNEL_MUXER = "vdl/muxer"
         private const val CHANNEL_DESCRAMBLE = "vdl/jmdescramble"
         private const val CHANNEL_MEDIA = "vdl/media"
+        private const val CHANNEL_KEEPALIVE = "vdl/keepalive"
     }
 }

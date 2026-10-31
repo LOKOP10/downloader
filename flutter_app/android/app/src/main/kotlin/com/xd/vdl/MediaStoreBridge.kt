@@ -3,6 +3,7 @@ package com.xd.vdl
 import android.content.ContentValues
 import android.content.Context
 import android.os.Build
+import android.media.MediaScannerConnection
 import android.provider.MediaStore
 import java.io.File
 import java.io.IOException
@@ -63,6 +64,22 @@ object MediaStoreBridge {
             resolver.update(uri, done, null, null)
         }
         return relativeDir.trimEnd('/') + "/" + displayName
+    }
+
+    /**
+     * 让已经写进公共目录的文件被系统媒体库收录（MediaScanner）。
+     *
+     * 为什么需要：用 dart:io 往 /storage/emulated/0/Pictures 直写文件，图库 App
+     * 有时能自己遍历到，但 **QQ / 微信的「最近图片」只查 MediaStore**，不登记就永远
+     * 看不到。下载完成后扫一次，等同系统相册收到这个文件。
+     *
+     * @return 实际发起扫描的文件数
+     */
+    fun scanFiles(context: Context, paths: List<String>): Int {
+        val existing = paths.filter { it.isNotBlank() && File(it).exists() }
+        if (existing.isEmpty()) return 0
+        MediaScannerConnection.scanFile(context, existing.toTypedArray(), null, null)
+        return existing.size
     }
 
     private fun mimeOf(name: String): String {

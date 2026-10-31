@@ -63,6 +63,19 @@ class Downloader {
   /// 小于 2MB 的文件单独切段没意义，直接单连接。
   static const _chunkThreshold = 2 * 1024 * 1024;
 
+  /// 每段至少这么大：段太碎时每个请求的建连开销（TCP+TLS 约 200ms）占比变高，
+  /// 反而更慢，也更容易被 CDN 判定为异常流量。
+  static const _minChunk = 8 * 1024 * 1024;
+
+  /// 段数规划：并发上限 16，且按文件大小兜住最少段大小。
+  static int planParts(int total, int connections) {
+    final wanted = connections.clamp(1, 16);
+    if (total < _chunkThreshold) return 1;
+    final affordable = total ~/ _minChunk;
+    if (affordable <= 0) return 1;
+    return wanted < affordable ? wanted : affordable;
+  }
+
   Future<void> download({
     required String url,
     required File target,
@@ -72,7 +85,7 @@ class Downloader {
     CancelToken? cancelToken,
   }) async {
     final total = await _probeTotal(url, headers);
-    final parts = total >= _chunkThreshold ? connections.clamp(1, 8) : 1;
+    final parts = planParts(total, connections);
 
     await target.parent.create(recursive: true);
     final file = await target.open(mode: FileMode.write);
@@ -95,19 +108,25 @@ class Downloader {
     var lastBytes = 0;
     var lastAt = DateTime.now();
 
+    // 速度用的是指数滑动平均（EMA），不是瞬时值：
+    // 网络本来就一顿一顿的，直接显示"最近 150ms 的瞬时速度"会让人以为「时快时慢」，
+    // 平滑之后曲线贴合真实趋势，界面和通知里的数字也不会乱跳。
+    var smoothSpeed = 0.0;
+
     void report() {
       final now = DateTime.now();
       final ms = now.difference(lastAt).inMilliseconds;
-      var speed = 0.0;
-      if (ms >= 150) {
-        speed = (received - lastBytes) * 1000 / ms;
+      if (ms >= 300) {
+        final instant = (received - lastBytes) * 1000 / ms;
+        smoothSpeed =
+            smoothSpeed <= 0 ? instant : smoothSpeed * 0.65 + instant * 0.35;
         lastBytes = received;
         lastAt = now;
       }
       onProgress(DownloadProgress(
         received: received,
         total: total > 0 ? total : received,
-        speed: speed,
+        speed: smoothSpeed,
       ));
     }
 

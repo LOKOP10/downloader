@@ -248,13 +248,31 @@ class MangaLibrary extends ChangeNotifier {
   /// 封面图缓存（path → 字节）。书架格子会反复 build，别每次都去解包。
   static final Map<String, Uint8List> _covers = {};
 
-  /// 封面文件：与 zip 同名的 .cover.jpg（下载时就写好，读它最快）。
+  /// 封面文件：与 zip 同名的**隐藏**文件 `.书名.cover.jpg`（下载时就写好，读它最快）。
+  ///
+  /// 为什么必须隐藏（以 `.` 开头）：漫画目录常设在 `Pictures` 下，系统相册会把
+  /// 目录里非隐藏的 jpg 全扫进去 —— 以前每刷新一次书架、每本没封面的书都会落地一张
+  /// 可见 `.cover.jpg`，相册里就成批冒出封面图。隐藏名 MediaScanner 直接跳过。
   static File coverFileFor(String path) {
-    final dot = path.toLowerCase().endsWith('.zip')
-        ? path.substring(0, path.length - 4)
-        : path;
-    return File(dot + '.cover.jpg');
+    final base = _stripZipSuffix(path);
+    // 不能用 Platform.pathSeparator：路径来自手机（'/'），单测跑在 Windows 上是 '\'，
+    // 两种分隔符都要认，否则会拼出「./sdcard/.../*.cover.jpg」这种怪路径。
+    final slash = base.lastIndexOf('/');
+    final backslash = base.lastIndexOf('\\');
+    final sep = slash > backslash ? slash : backslash;
+    final dir = sep >= 0 ? base.substring(0, sep + 1) : '';
+    final name = sep >= 0 ? base.substring(sep + 1) : base;
+    return File(dir + '.' + name + '.cover.jpg');
   }
+
+  /// 旧版的**可见**封面名（`书名.cover.jpg`），只用于迁移旧书架。
+  static File legacyCoverFileFor(String path) =>
+      File(_stripZipSuffix(path) + '.cover.jpg');
+
+  static String _stripZipSuffix(String path) =>
+      path.toLowerCase().endsWith('.zip')
+          ? path.substring(0, path.length - 4)
+          : path;
 
   /// 取一本书的封面字节；没有就返回 null（界面显示占位图标）。
   ///
@@ -268,6 +286,20 @@ class MangaLibrary extends ChangeNotifier {
         final bytes = await coverFile.readAsBytes();
         if (bytes.isNotEmpty) {
           _covers[book.path] = bytes;
+          return bytes;
+        }
+      }
+      // 旧版封面是可见文件（会被相册收录）：读到就搬到隐藏名下，并删掉可见的那份
+      final legacy = legacyCoverFileFor(book.path);
+      if (await legacy.exists()) {
+        final bytes = await legacy.readAsBytes();
+        if (bytes.isNotEmpty) {
+          _covers[book.path] = bytes;
+          try {
+            await coverFile.writeAsBytes(bytes, flush: true);
+            await legacy.delete();
+            debugPrint('封面已迁移为隐藏文件：' + coverFile.path);
+          } catch (_) {}
           return bytes;
         }
       }

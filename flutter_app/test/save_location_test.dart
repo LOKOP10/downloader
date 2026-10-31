@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vdl/features/download/data/download_location.dart';
 import 'package:vdl/features/manga/data/manga_location.dart';
 import 'package:vdl/features/settings/ui/widgets/save_location_dialog.dart';
+import 'package:vdl/shared/media_saver.dart';
 
 /// 保存位置的两套配置必须互不影响。
 ///
@@ -158,6 +159,24 @@ void main() {
     expect(saved, isEmpty);
     expect(find.textContaining('没有选到可写目录'), findsOneWidget);
   });
+
+  group('媒体库不收封面与隐藏文件', () {
+    test('书架封面不进相册（可见名与隐藏名都排除）', () {
+      expect(MediaSaver.isMediaFile('/a/书.cover.jpg'), isFalse);
+      expect(MediaSaver.isMediaFile('/a/.书.cover.jpg'), isFalse);
+    });
+
+    test('隐藏文件一律不登记', () {
+      expect(MediaSaver.isMediaFile('/a/.隐藏.mp4'), isFalse);
+      expect(MediaSaver.isMediaFile('/a/.thumb.png'), isFalse);
+    });
+
+    test('正常视频/图片照常登记', () {
+      expect(MediaSaver.isMediaFile('/a/正常.mp4'), isTrue);
+      expect(MediaSaver.isMediaFile('/a/正常.jpg'), isTrue);
+      expect(MediaSaver.isMediaFile('/a/Pictures/视频下载器/x.webp'), isTrue);
+    });
+  });
 }
 
 /// 把对话框挂在一个按钮后面（和真实调用方式一致）。
@@ -186,4 +205,32 @@ Widget _dialogHost({
       ),
     ),
   );
+
+  group('公共目录判断（决定要不要扫媒体库）', () {
+    test('Pictures / DCIM / Movies / Download 都算公共目录', () {
+      for (final p in [
+        '/storage/emulated/0/Pictures/a.jpg',
+        '/storage/emulated/0/Pictures/视频下载器/b.mp4',
+        '/storage/emulated/0/DCIM/Camera/c.jpg',
+        '/storage/emulated/0/Movies/d.mp4',
+        '/storage/emulated/0/Download/e.mp4',
+      ]) {
+        expect(MediaSaver.isPublicMediaPath(p), isTrue, reason: p);
+      }
+    });
+
+    test('应用私有目录不扫（别的 App 本来就看不到）', () {
+      for (final p in [
+        '/storage/emulated/0/Android/data/com.xd.vdl.flutter/files/Downloads/a.mp4',
+        '/storage/emulated/0/Android/obb/x/a.mp4',
+      ]) {
+        expect(MediaSaver.isPublicMediaPath(p), isFalse, reason: p);
+      }
+    });
+
+    test('其它平台的路径不处理', () {
+      expect(MediaSaver.isPublicMediaPath('C:\\Users\\x\\Downloads\\a.mp4'), isFalse);
+      expect(MediaSaver.isPublicMediaPath(''), isFalse);
+    });
+  });
 }

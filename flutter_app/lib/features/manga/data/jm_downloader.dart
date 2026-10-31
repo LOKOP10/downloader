@@ -74,6 +74,16 @@ class JmDownloader {
       }
       final pages = plan;
 
+      // 先测一遍图片镜像的延迟（每个镜像取首字节），按最快的那几个下。
+      // 一本上百页逐张下载，镜像选错等于每页多等一次 RTT。
+      if (!JmClient.instance.imageSpeedProbed && pages.isNotEmpty) {
+        onProgress?.call(0, pages.length, '正在测速选择最快镜像…');
+        await JmClient.instance
+            .probeImageDomains(pages.first.chapterId, pages.first.name);
+        final ranked = JmClient.rankedImageDomains();
+        debugPrint('禁漫镜像测速完成：' + ranked.take(3).join(' > '));
+      }
+
       // 8 路并发抓图，结果按原序号回填 —— 写包顺序与页面顺序严格一致
       final results = List<Uint8List?>.filled(pages.length, null);
       final failed = <int>[];
