@@ -125,9 +125,8 @@ void main() {
       expect(got, isNull);
     });
 
-    testWidgets('Iwara / Pornhub / hanime1 的链接能嗅探', (tester) async {
+    testWidgets('Pornhub / hanime1 的链接能嗅探', (tester) async {
       const cases = <String, SitePlatform>{
-        'https://www.iwara.tv/video/qR94gLGO9VGEqL': SitePlatform.iwara,
         'https://www.pornhub.com/view_video.php?viewkey=6a46ec3e259f3':
             SitePlatform.pornhub,
         'https://hanime1.me/watch?v=408885': SitePlatform.hanime1,

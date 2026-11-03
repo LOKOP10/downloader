@@ -58,8 +58,6 @@ void main() {
           SitePlatform.bili);
       expect(LinkDetect.platformOf('https://www.xiaohongshu.com/explore/abc'),
           SitePlatform.xhs);
-      expect(LinkDetect.platformOf('https://www.iwara.tv/video/abc'),
-          SitePlatform.iwara);
       expect(LinkDetect.platformOf('https://www.pornhub.com/view_video.php?viewkey=abc'),
           SitePlatform.pornhub);
       expect(LinkDetect.platformOf('https://hanime1.me/watch?v=408885'),
@@ -67,9 +65,7 @@ void main() {
       expect(LinkDetect.platformOf('https://example.com/a.mp4'), isNull);
     });
 
-    test('三个站点的裸域名（分享文案里常常没有协议头）', () {
-      expect(LinkDetect.platformOf('www.iwara.tv/video/qR94gLGO9VGEqL'),
-          SitePlatform.iwara);
+    test('两个站点的裸域名（分享文案里常常没有协议头）', () {
       expect(LinkDetect.platformOf('www.pornhub.com/view_video.php?viewkey=6a46ec3e259f3'),
           SitePlatform.pornhub);
       expect(LinkDetect.platformOf('hanime1.me/watch?v=408885'),

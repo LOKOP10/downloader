@@ -15,7 +15,7 @@ class ClipboardSniffer with WidgetsBindingObserver {
 
   /// 识别到**本站支持的站点**的链接时回调（url 已补全协议头）。
   ///
-  /// 只在这 8 个平台（抖音 / 小红书 / B站 / X / Iwara / Pornhub / hanime1 / 禁漫）
+  /// 只在这 7 个平台（抖音 / 小红书 / B站 / X / Pornhub / hanime1 / 禁漫）
   /// 命中时才回调；别的网站（文档、代码仓库、新闻…）一律静默，不当噪声。
   final void Function(String url, SitePlatform platform) onDetected;
 

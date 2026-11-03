@@ -1,7 +1,6 @@
 import 'package:vdl/features/parse/bili_parser.dart';
 import 'package:vdl/features/parse/douyin_parser.dart';
 import 'package:vdl/features/parse/hanime1_parser.dart';
-import 'package:vdl/features/parse/iwara_parser.dart';
 import 'package:vdl/features/parse/media_info.dart';
 import 'package:vdl/features/parse/pornhub_parser.dart';
 import 'package:vdl/features/parse/x_parser.dart';
@@ -17,7 +16,6 @@ abstract final class ParserRegistry {
   static const XhsParser _xhs = XhsParser();
   static const BiliParser _bili = BiliParser();
   static const XParser _x = XParser();
-  static const IwaraParser _iwara = IwaraParser();
   static const PornhubParser _pornhub = PornhubParser();
   static const Hanime1Parser _hanime1 = Hanime1Parser();
 
@@ -27,7 +25,6 @@ abstract final class ParserRegistry {
       platform == SitePlatform.xhs ||
       platform == SitePlatform.bili ||
       platform == SitePlatform.x ||
-      platform == SitePlatform.iwara ||
       platform == SitePlatform.pornhub ||
       platform == SitePlatform.hanime1 ||
       platform == SitePlatform.jm;
@@ -45,8 +42,6 @@ abstract final class ParserRegistry {
         return _bili.parse(url);
       case SitePlatform.x:
         return _x.parse(url);
-      case SitePlatform.iwara:
-        return _iwara.parse(url);
       case SitePlatform.pornhub:
         return _pornhub.parse(url);
       case SitePlatform.hanime1:

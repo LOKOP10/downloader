@@ -86,7 +86,6 @@ abstract final class LinkDetect {
         host.endsWith('.t.co')) {
       return SitePlatform.x;
     }
-    if (host.contains('iwara.tv')) return SitePlatform.iwara;
     if (host.contains('pornhub.com')) return SitePlatform.pornhub;
     if (host.contains('hanime1.me')) return SitePlatform.hanime1;
     // 禁漫：镜像域名很多，按特征词匹配（18comic*、jmcomic*、comic18*、18h.mm）

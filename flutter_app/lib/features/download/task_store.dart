@@ -534,12 +534,11 @@ class TaskStore extends ChangeNotifier {
   /// 下载用的 User-Agent。
   ///
   /// · B 站：DASH 的 .m4s 只认桌面 UA，安卓 UA 直接 403（实测），所以整站走桌面 UA；
-  /// · Iwara / Pornhub / hanime1：解析阶段就是用桌面 UA 拿到的直链，
+  /// · Pornhub / hanime1：解析阶段就是用桌面 UA 拿到的直链，
   ///   下载与探针保持同一个 UA，免得 CDN 按 UA 判来源再回 403。
   static String _uaFor(SitePlatform? platform) {
     switch (platform) {
       case SitePlatform.bili:
-      case SitePlatform.iwara:
       case SitePlatform.pornhub:
       case SitePlatform.hanime1:
         return AppHttp.uaDesktop;

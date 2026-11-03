@@ -5,7 +5,6 @@ enum SitePlatform {
   xhs('小红书', '红'),
   bili('B站', 'B'),
   x('X', 'X'),
-  iwara('Iwara', 'I'),
   pornhub('Pornhub', 'P'),
   hanime1('hanime1', 'H'),
   jm('禁漫', '禁');

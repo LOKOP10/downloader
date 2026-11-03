@@ -11,7 +11,6 @@
 | 小红书 | 笔记详情页 SSR（`window.__INITIAL_STATE__`），短链自动展开 | 游客可用，带 `xsec_token` 更稳 |
 | B站 | view + playurl 接口；DASH（1080P/1080P+/4K，音视频分离，下完用原生 MediaMuxer 合并）+ durl 兜底（720P，单文件），b23.tv 短链自动展开 | 720P 游客可用；1080P 以上需填 `SESSDATA` |
 | X（推特） | syndication 公开接口（token = `((id/1e15)*PI)` 的 36 进制），t.co 短链自动展开 | 免登录；敏感/受限推文取不到 |
-| Iwara | 详情接口 + `X-Version` 签名取档位表（Source / 540 / 360），并发 Range 探针取真实大小 | 免登录 |
 | Pornhub | 播放页 `flashvars` 取直链；2026-10 起站点只发 HLS，自动改走 m3u8 分片拼接 | 免登录，按 IP 限流 |
 | hanime1 | `/watch?v=<id>` 页面里的 3 个 `<source>`（1080/720/480）+ 1 字节 Range 探针 | 免登录，页面无时长字段 |
 | 禁漫天堂 | 移动端 App 接口（签名 + AES 解密 + 图片切片重排），多章本子逐章合并 | 游客可下大部分；官方整本打包接口需登录 |
@@ -40,7 +39,6 @@ flutter build apk --release
 flutter test                                  # 单元 / 组件测试
 dart run tool/check_douyin.dart [分享链接]     # 抖音解析 + 下载端到端
 dart run tool/check_xhs.dart <分享链接>        # 小红书解析 + 下载端到端
-dart run tool/check_iwara.dart <作品链接> --proxy 127.0.0.1:7897   # Iwara
 dart run tool/check_pornhub.dart <作品链接> --proxy 127.0.0.1:7897 # Pornhub（HLS）
 dart run tool/check_hanime1.dart <作品链接> --proxy 127.0.0.1:7897 # hanime1
 dart run tool/check_downloader.dart           # 下载引擎单/多连接一致性
@@ -157,17 +155,13 @@ dart run tool/check_downloader.dart           # 下载引擎单/多连接一致�
   解析走纯 HTTP；失败时按提示换链接或填 Cookie。
 - 图文作品只保存静态图，不还原 Live Photo 的视频轨。
 
-## Iwara / Pornhub / hanime1 三个站点的坑
+## Pornhub / hanime1 两个站点的坑
 
 三者都走纯 HTTP，但拦人的地方不一样，代码里各自留了注释，这里只记结论：
 
-- **Cloudflare（iwara / hanime1 / Pornhub 的 HLS CDN）**：同一个 URL、同一组请求头，
+- **Cloudflare（hanime1 / Pornhub 的 HLS CDN）**：同一个 URL、同一组请求头，
   `HttpClient` 一律 403（页面）或 410（m3u8），换成裸 TLS 按 Chrome 的头顺序手写请求就 200
   —— `lib/shared/net/browser_http.dart` 就是干这个的，只给这三家用，普通站点继续走 `AppHttp`。
-- **Iwara 签名**：请求档位接口必须带 `X-Version = sha1(<fileId>_<expires>_<salt>)`；
-  旧盐仍回 200 但只给 360/preview（静默降级），所以签名值有离线测试对照 Python hashlib。
-- **Iwara 备用地址**：档位接口每请求一次就重新签发一批「角色名」CDN 域名，
-  取两轮攒备用；探针只能 `Range: bytes=0-0`（该 CDN 挡 HEAD）。
 - **Pornhub 发流方式变了（2026-10）**：`mediaDefinitions` 只剩 HLS，唯一的 mp4
   `get_media` 端点会回整页 HTML（桌面端同一时刻也拿不到 mp4，已对照验证）。
   解析器做成「mp4 优先、HLS 兜底」，HLS 交给 `HlsDownloader` 逐片下载 + 按序拼接。
@@ -182,7 +176,7 @@ dart run tool/check_downloader.dart           # 下载引擎单/多连接一致�
 
 | 配置 | 键 | 管什么 |
 |---|---|---|
-| 视频 / 图片保存位置 | `download.dir` | 普通视频、图集图片（含 Iwara / Pornhub / hanime1 的成品） |
+| 视频 / 图片保存位置 | `download.dir` | 普通视频、图集图片（含 Pornhub / hanime1 的成品） |
 | 漫画保存位置 | `manga.dir` | 禁漫整本的 `.zip`（书架扫描这个目录） |
 
 设置页两行分别显示**当前生效的完整路径**，保存成功后 toast 也报完整路径。
