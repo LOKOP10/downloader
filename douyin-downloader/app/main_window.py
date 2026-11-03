@@ -30,6 +30,7 @@ from .view import design as D
 from .view import workspace as W
 from .view.batch_interface import BatchInterface
 from .view.converter_interface import ConverterInterface
+from .view.frames_interface import FramesInterface
 from .view.gif_interface import GifInterface
 from .view.home_interface import HomeInterface
 from .view.manga_interface import MangaInterface
@@ -48,6 +49,7 @@ _NAV_ITEMS = [
     (FIF.MOVIE, "本地视频", "下载完成的视频自动入库，记住播放位置接着看"),
     (FIF.VIDEO, "WebP 转 MP4", "本地 WebP 动图批量转 MP4 / 顺序合并"),
     (FIF.PHOTO, "MP4 转 GIF", "把视频片段转成循环 GIF，可批量处理"),
+    (FIF.ZOOM, "导出原始帧", "截取某一段时间，逐帧导出原始画面并立即回放"),
     (FIF.SETTING, "设置", "下载行为、平台登录态与界面外观"),
 ]
 
@@ -108,6 +110,7 @@ class MainWindow(FluentWindow):
         self.videoInterface = VideoInterface(self.ctx, self)
         self.converterInterface = ConverterInterface(self.ctx, self)
         self.gifInterface = GifInterface(self.ctx, self)
+        self.framesInterface = FramesInterface(self.ctx, self)
         self.settingInterface = SettingInterface(self.ctx, self)
         self.taskInterface.read_manga.connect(self._read_manga)
 
@@ -131,6 +134,7 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.videoInterface, FIF.MOVIE, "本地视频")
         self.addSubInterface(self.converterInterface, FIF.VIDEO, "WebP 转 MP4")
         self.addSubInterface(self.gifInterface, FIF.PHOTO, "MP4 转 GIF")
+        self.addSubInterface(self.framesInterface, FIF.ZOOM, "导出原始帧")
         self.addSubInterface(self.settingInterface, FIF.SETTING, "设置")
 
         self.navigationInterface.setAcrylicEnabled(False)
@@ -140,7 +144,8 @@ class MainWindow(FluentWindow):
         self._pages = [self.homeInterface, self.batchInterface,
                        self.taskInterface, self.mangaInterface,
                        self.videoInterface, self.converterInterface,
-                       self.gifInterface, self.settingInterface]
+                       self.gifInterface, self.framesInterface,
+                       self.settingInterface]
 
         # 顶部导航栏（TabBar 这个名字保留：外部与测试用它判断导航项数量 /
         # 主题按钮位置，语义仍是「导航栏」）
@@ -177,7 +182,7 @@ class MainWindow(FluentWindow):
 
     def closeEvent(self, event):
         # 异步等待转换取消清理，防止解释器退出时遗留 FFmpeg；不阻塞 GUI 线程。
-        converters = (self.converterInterface, self.gifInterface)
+        converters = (self.converterInterface, self.gifInterface, self.framesInterface)
         busy = [page for page in converters if page._busy]
         if busy:
             for page in busy:
