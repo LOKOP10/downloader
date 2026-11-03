@@ -24,6 +24,18 @@ class MainActivity : FlutterActivity() {
         registerDescramble(flutterEngine)
         registerMedia(flutterEngine)
         registerKeepAlive(flutterEngine)
+        registerNet(flutterEngine)
+    }
+
+    /** 系统代理：Dart 的 HttpClient / SecureSocket 不读 WiFi 代理，得由原生读给它。 */
+    private fun registerNet(flutterEngine: FlutterEngine) {
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_NET)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "systemProxy" -> result.success(ProxyBridge.systemProxy(this))
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     /** 下载保活：起/停前台服务（切后台不被系统挂起）。 */
@@ -154,5 +166,6 @@ class MainActivity : FlutterActivity() {
         private const val CHANNEL_DESCRAMBLE = "vdl/jmdescramble"
         private const val CHANNEL_MEDIA = "vdl/media"
         private const val CHANNEL_KEEPALIVE = "vdl/keepalive"
+        private const val CHANNEL_NET = "vdl/net"
     }
 }

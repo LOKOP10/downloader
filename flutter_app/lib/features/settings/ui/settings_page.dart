@@ -20,6 +20,7 @@ import 'package:vdl/features/settings/ui/widgets/save_location_dialog.dart';
 import 'package:vdl/features/parse/parser_registry.dart';
 import 'package:vdl/shared/app_log.dart';
 import 'package:vdl/shared/media_saver.dart';
+import 'package:vdl/shared/net/proxy_config.dart';
 import 'package:vdl/shared/site.dart';
 
 /// 设置页：下载 / 账号 / 外观 / 关于。分组卡片 + 52dp 列表行。
@@ -136,6 +137,13 @@ class _SettingsPageState extends State<SettingsPage> {
               subtitle: '单文件切几段同时下载，增大一般更快（4~16）',
               trailingText: TaskStore.instance.connections.toString(),
               onTap: _editConnections,
+            ),
+            AppListTile(
+              icon: Icons.vpn_lock_outlined,
+              title: '网络代理',
+              subtitle: _proxySubtitle(),
+              trailingText: '修改',
+              onTap: _editProxy,
             ),
             AppListTile(
               icon: Icons.drive_file_rename_outline,
@@ -301,7 +309,7 @@ class _SettingsPageState extends State<SettingsPage> {
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 4, 20, 16),
               child: Text(
-                '单连接被限速时（如 Iwara）调大明显更快；站点限流强或手机发热时调小更稳',
+                '单连接被限速时（如 Pornhub）调大明显更快；站点限流强或手机发热时调小更稳',
                 style: TextStyle(fontSize: 11),
               ),
             ),
@@ -315,6 +323,73 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     setState(() {});
     _toast('已改为 ' + picked.toString() + ' 段，从下一个任务开始生效');
+  }
+
+  /// 网络代理副标题：手动 > 跟随系统 > 直连。
+  String _proxySubtitle() {
+    final manual = ProxyConfig.manual;
+    if (manual != null) return '手动：' + manual;
+    final active = ProxyConfig.active;
+    if (active != null) return '跟随系统：' + active;
+    return '直连（hanime1 / Pornhub 需要能出网或配代理）';
+  }
+
+  /// 手动填 host:port；留空 = 跟随系统 WiFi 代理。
+  ///
+  /// 为什么需要手填：Dart 的 socket 不读系统代理，而部分 ROM / Clash 的 WiFi 代理
+  /// 又读不到（或用户用的是 SOCKS 端口），手填是最后的兜底。
+  Future<void> _editProxy() async {
+    final controller = TextEditingController(text: ProxyConfig.manual ?? '');
+    final picked = await showDialog<String?>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('网络代理'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '填 Clash 的 HTTP 端口：只写端口号（如 1234）会自动补成 127.0.0.1，'
+              '也可写全 host:port。留空 = 跟随系统 WiFi 代理。',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(hintText: '127.0.0.1:7890'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(''),
+            child: const Text('跟随系统'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(null),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    final text = picked.trim();
+    // 非空但解析不出 host:port 时**明确报错**，不能悄悄存成「跟随系统」——
+    // 那样用户以为保存了，实际还在用系统/直连（就是「保存没生效」的真相之一）。
+    if (text.isNotEmpty && ProxyConfig.normalize(text) == null) {
+      _toast('格式不对：填 host:port（如 127.0.0.1:1234），也可以只填端口号');
+      return;
+    }
+    final applied = await ProxyConfig.saveManual(text.isEmpty ? null : text);
+    if (!mounted) return;
+    setState(() {});
+    _toast(applied == null
+        ? '已改为直连 / 跟随系统（当前无可用代理）'
+        : '代理已生效：' + applied);
   }
 
   Future<void> _editMangaPath() async {
