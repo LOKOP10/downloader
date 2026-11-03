@@ -84,7 +84,12 @@ class Downloader {
     required void Function(DownloadProgress) onProgress,
     CancelToken? cancelToken,
   }) async {
-    final total = await _probeTotal(url, headers);
+    // 整个下载共用一个 HttpClient：探针、各分段、失败重试都走它的连接池，
+    // 不再每次请求都重新做 TLS 握手 —— 手机上实测单次握手 10~16 秒，
+    // 每段各来一次等于白等十几秒。
+    final client = AppHttp.newClient();
+    client.maxConnectionsPerHost = connections.clamp(1, 16) + 2;
+    final total = await _probeTotal(url, headers, client);
     final parts = planParts(total, connections);
 
     await target.parent.create(recursive: true);
@@ -143,6 +148,7 @@ class Downloader {
             report();
           },
           cancelToken: cancelToken,
+          client: client,
         );
       } else {
         final chunk = (total / parts).ceil();
@@ -164,6 +170,7 @@ class Downloader {
               report();
             },
             cancelToken: cancelToken,
+            client: client,
           ));
         }
         await Future.wait(futures);
@@ -171,11 +178,13 @@ class Downloader {
       report();
     } finally {
       await file.close();
+      // 连接池交给 HttpClient 回收；这里只释放资源（重试/后续请求已在同一个池里）
+      client.close();
     }
   }
 
-  Future<int> _probeTotal(String url, Map<String, String>? headers) async {
-    final client = AppHttp.newClient();
+  Future<int> _probeTotal(
+      String url, Map<String, String>? headers, HttpClient client) async {
     try {
       final req = await client.getUrl(Uri.parse(url));
       (headers ?? AppHttp.headers()).forEach(req.headers.set);
@@ -191,8 +200,6 @@ class Downloader {
       return len > 0 ? len : 0;
     } catch (_) {
       return 0;
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -204,25 +211,23 @@ class Downloader {
     required int? end,
     required void Function(int) onBytes,
     CancelToken? cancelToken,
+    required HttpClient client,
   }) async {
-    final client = AppHttp.newClient();
-    try {
-      final req = await client.getUrl(Uri.parse(url));
-      (headers ?? AppHttp.headers()).forEach(req.headers.set);
-      if (end != null) req.headers.set('Range', 'bytes=${start}-${end}');
-      final resp = await req.close().timeout(const Duration(seconds: 30));
-      if (resp.statusCode >= 400) {
-        throw HttpException('下载失败 HTTP ${resp.statusCode}');
-      }
-      var position = start;
-      await for (final chunk in resp) {
-        cancelToken?.throwIfCancelled();
-        await writeAt(position, chunk);
-        position += chunk.length;
-        onBytes(chunk.length);
-      }
-    } finally {
-      client.close(force: true);
+    // 不再自建 client：连接由 download() 的共享池提供（keep-alive 复用，
+    // 避免每段重做一次 TLS 握手）。
+    final req = await client.getUrl(Uri.parse(url));
+    (headers ?? AppHttp.headers()).forEach(req.headers.set);
+    if (end != null) req.headers.set('Range', 'bytes=${start}-${end}');
+    final resp = await req.close().timeout(const Duration(seconds: 30));
+    if (resp.statusCode >= 400) {
+      throw HttpException('下载失败 HTTP ${resp.statusCode}');
+    }
+    var position = start;
+    await for (final chunk in resp) {
+      cancelToken?.throwIfCancelled();
+      await writeAt(position, chunk);
+      position += chunk.length;
+      onBytes(chunk.length);
     }
   }
 }
