@@ -1,4 +1,5 @@
 """Video library persistence, scanning, and window integration."""
+import json
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import tempfile
@@ -54,6 +55,38 @@ class VideoLibraryTest(unittest.TestCase):
         lib1.save()
         with self.assertRaises(OSError):
             lib2.save()
+
+    def test_cover_survives_program_dir_rename(self):
+        """封面存相对路径：程序目录整体改名（升级时的常规操作）后封面不该失效。"""
+        base = self.root / "1.8.17.0"
+        (base / "video_covers").mkdir(parents=True)
+        cover = base / "video_covers" / "abc_a.mp4.jpg"
+        cover.write_bytes(b"jpg")
+        lib = VideoLibrary(base / "video_library.json")
+        lib.add(str(self.root / "a.mp4"), "示例").cover = str(cover)
+        lib.save()
+        raw = json.loads((base / "video_library.json").read_text(encoding="utf-8"))
+        self.assertEqual(raw["videos"][0]["cover"],
+                         os.path.join("video_covers", "abc_a.mp4.jpg"))
+        renamed = self.root / "1.8.18.0"
+        base.rename(renamed)
+        reloaded = VideoLibrary(renamed / "video_library.json")
+        self.assertEqual(Path(reloaded.videos[0].cover),
+                         renamed / "video_covers" / "abc_a.mp4.jpg")
+        self.assertTrue(Path(reloaded.videos[0].cover).is_file())
+
+    def test_legacy_absolute_cover_is_repaired_on_load(self):
+        """老记录存的是绝对路径：目录一改名就失效，读库时按文件名找回来。"""
+        (self.root / "video_covers").mkdir()
+        cover = self.root / "video_covers" / "deadbeef_a.mp4.jpg"
+        cover.write_bytes(b"jpg")
+        stale = self.root / "1.8.17.0" / "video_covers" / cover.name
+        data = {"version": 1, "videos": [
+            {"path": str(self.root / "a.mp4"), "title": "a", "cover": str(stale)}]}
+        (self.root / "video_library.json").write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        lib = VideoLibrary(self.root / "video_library.json")
+        self.assertEqual(Path(lib.videos[0].cover), cover)
 
     def test_scan_videos_filters_and_handles_missing(self):
         (self.root / "sub").mkdir()
@@ -114,7 +147,7 @@ class VideoLibraryTest(unittest.TestCase):
         window.show()
         self.app.processEvents()
         self.addCleanup(window.close)
-        self.assertEqual(window.tabBar.count(), 8)
+        self.assertEqual(window.tabBar.count(), 9)
         self.assertIs(window._pages[4], window.videoInterface)
         page = window.videoInterface
         window.switchTo(page)

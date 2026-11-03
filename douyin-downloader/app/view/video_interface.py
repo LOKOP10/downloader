@@ -4,9 +4,10 @@ import logging
 import os
 from collections import deque
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl, Slot
-from PySide6.QtGui import (QColor, QDesktopServices, QPainter, QPainterPath, QPen,
-                           QPixmap)
+from PySide6.QtCore import (QMimeData, QPointF, QRectF, QSize, Qt, QTimer, QUrl,
+                            Slot)
+from PySide6.QtGui import (QColor, QDesktopServices, QGuiApplication, QPainter,
+                           QPainterPath, QPen, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QListView,
                                QListWidget, QListWidgetItem, QMenu, QMessageBox,
                                QStyle, QStyledItemDelegate, QWidget)
@@ -14,9 +15,10 @@ from qfluentwidgets import ComboBox, FluentIcon as FIF, PrimaryPushButton, PushB
 from qfluentwidgets.common.style_sheet import isDarkTheme
 
 from ..core.ffmpeg import ffmpeg_path
-from ..core.video_library import (VideoLibrary, download_cover_image, extract_first_frame,
-                                  find_downloaded_cover, folder_key, is_video,
-                                  is_video_file_entry, natural_key, scan_videos)
+from ..core.video_library import (COVER_DIR, VideoLibrary, download_cover_image,
+                                  extract_first_frame, find_downloaded_cover,
+                                  folder_key, is_video, is_video_file_entry,
+                                  natural_key, scan_videos)
 from . import design as D
 from . import workspace as W
 from .manga_reader import LocalJobs
@@ -127,7 +129,7 @@ class _PosterDelegate(QStyledItemDelegate):
 
 
 class _VideoShelf(QListWidget):
-    """视频墙：悬停露出右上角删除按钮，点按钮删除，点其它位置继续播放。"""
+    """视频墙：悬停露出右上角删除按钮，点按钮删除；双击卡片播放，单击只选中。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -137,6 +139,7 @@ class _VideoShelf(QListWidget):
         self.delete_hovered = False   # 鼠标是否正压在删除按钮上
         self.busy = False             # 与页面 _busy 同步，忙碌时不响应删除
         self.on_delete = None         # callable(QListWidgetItem)
+        self.on_open = None           # callable(QListWidgetItem)：双击卡片播放
 
     def _delete_item_at(self, position):
         """返回被点中的卡片；点不在删除按钮上则返回 None。"""
@@ -165,11 +168,23 @@ class _VideoShelf(QListWidget):
         self.unsetCursor()
         super().leaveEvent(event)
 
+    def mouseDoubleClickEvent(self, event):
+        """双击卡片播放：单击只负责选中，避免手滑就把播放器弹出来。"""
+        if event.button() == Qt.MouseButton.LeftButton and not self.busy:
+            item = self.itemAt(event.position().toPoint())
+            if item is not None and callable(self.on_open):
+                # 不转给父类：父类会再发 itemActivated，等于播两次
+                event.accept()
+                self.on_open(item)
+                return
+        super().mouseDoubleClickEvent(event)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and not self.busy:
             item = self._delete_item_at(event.position().toPoint())
             if item is not None:
-                # 吃掉这次点击：否则会继续冒泡成 itemClicked，又把视频播起来
+                # 吃掉这次点击：否则这一下会被算成选中卡片，
+                # 双击删按钮时的第二下也不会再落到 × 上
                 event.accept()
                 self.hover_row, self.delete_hovered = -1, False
                 self.viewport().update()
@@ -202,7 +217,7 @@ class VideoInterface(QWidget):
         # 卡片永远没有封面。与设置页的 ffmpeg 检测口径保持一致。
         self._ffmpeg = ffmpeg_path(ctx.config.base_dir)
         # 截帧缓存目录：程序目录/video_covers/（与 video_library.json 同级）
-        self._covers_dir = os.path.join(ctx.config.base_dir, "video_covers")
+        self._covers_dir = os.path.join(ctx.config.base_dir, COVER_DIR)
         layout = W.page_body(self, pad=24, spacing=12)
         header = QHBoxLayout()
         header.setSpacing(D.GAP_SM)
@@ -256,7 +271,9 @@ class VideoInterface(QWidget):
         self.shelf.setItemDelegate(_PosterDelegate(self._covers, self.shelf))
         self.shelf.on_delete = self._delete_from_card
         self.shelf.setAccessibleName("视频墙")
-        self.shelf.itemClicked.connect(self.open_item)
+        # 双击才播放（单击只选中）：卡片墙上误点一下不该弹出播放器
+        self.shelf.on_open = self.open_item
+        # 回车键激活走这条；鼠标双击由 _VideoShelf.mouseDoubleClickEvent 处理
         self.shelf.itemActivated.connect(self.open_item)
         self.shelf.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.shelf.customContextMenuRequested.connect(self._context_menu)
@@ -269,7 +286,8 @@ class VideoInterface(QWidget):
         self.empty.setMinimumHeight(180)
         panel.body.addWidget(self.empty, 1)
         self.status = D.hint_label(
-            "本地播放 · 源文件不变 · 悬停卡片点右上角 × 或右键可删除（可选仅移除记录，或连源文件一起删除）",
+            "本地播放 · 源文件不变 · 双击卡片播放 / 继续播放 · 右键可复制视频、删除"
+            "（可选仅移除记录，或连源文件一起删除）",
             self)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
@@ -648,15 +666,44 @@ class VideoInterface(QWidget):
         item = self.shelf.itemAt(position)
         if item is None:
             return
+        self._build_menu(item).exec(self.shelf.mapToGlobal(position))
+
+    def _build_menu(self, item):
+        """右键菜单：播放 / 复制到剪贴板 / 打开文件夹 / 删除。
+
+        单独拆出来是为了能测：exec() 会开自己的事件循环，菜单内容本身不该跟着卡住。
+        """
         video = item.data(Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
         menu.addAction("播放 / 继续播放", lambda: self.open_item(item))
         menu.addAction("从头播放", lambda: (video.__setattr__("resume_ms", 0), self._save(), self.open_item(item)))
+        menu.addAction("复制视频到剪贴板", lambda: self._copy_to_clipboard(video))
         menu.addAction("打开文件夹", lambda: QDesktopServices.openUrl(
             QUrl.fromLocalFile(os.path.dirname(os.path.abspath(video.path)))))
         menu.addSeparator()
         menu.addAction("删除…", lambda: self._delete_source(video))
-        menu.exec(self.shelf.mapToGlobal(position))
+        return menu
+
+    def _copy_to_clipboard(self, video):
+        """右键「复制视频到剪贴板」：复制的是文件本身（等同资源管理器 Ctrl+C）。
+
+        登记的是 CF_HDROP + 路径文本：粘到文件夹里就是复制这个文件，粘到聊天窗 /
+        输入框里得到的是路径，两种落点都不空手。
+        """
+        path = video.path
+        if not path or not os.path.isfile(path):
+            self.status.setText(f"源文件已不存在，无法复制：{os.path.basename(path or '')}")
+            return
+        try:
+            mime = QMimeData()
+            mime.setUrls([QUrl.fromLocalFile(path)])
+            mime.setText(path)
+            QGuiApplication.clipboard().setMimeData(mime)
+        except Exception as error:  # noqa: BLE001  剪贴板被占用时不该崩界面
+            self.status.setText(f"复制到剪贴板失败：{error}")
+            return
+        self.status.setText(
+            f"已复制到剪贴板：{os.path.basename(path)}（可在文件夹里粘贴，或粘贴路径文本）")
 
     def _remove(self, video):
         if self._player is not None and self._player.item is video:
@@ -744,8 +791,10 @@ class VideoInterface(QWidget):
         menu.addAction("使用说明", lambda: QMessageBox.information(
             self, "本地视频播放", "添加视频：选择一个或多个视频文件。\n"
             "导入文件夹：递归扫描子目录里的全部视频。\n"
-            "点击卡片继续播放；鼠标移到卡片上，右上角出现 × 可直接删除，\n"
-            "右键菜单也有删除（可选仅移除记录，或连源文件一起删除，删除不可撤销）。\n"
+            "双击卡片播放 / 继续播放（单击只选中，不会误开播放器）；\n"
+            "鼠标移到卡片上，右上角出现 × 可直接删除。\n"
+            "右键菜单还能「复制视频到剪贴板」（粘到文件夹里是复制文件，粘到输入框里是路径），\n"
+            "以及删除（可选仅移除记录，或连源文件一起删除，删除不可撤销）。\n"
             "「检查文件」核对源文件是否还在：已被删除的记录会自动清理，\n"
             "外置盘 / 网络盘没连上时只提示、不清理。\n"
             "下载任务完成的视频会自动入库（封面图不会）。\n"
