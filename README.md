@@ -11,7 +11,7 @@
 
 | 能力 | Windows 桌面端 | Android 端 |
 |---|---|---|
-| 支持站点 | **10 个**（小红书、X、Instagram、YouTube 全支持） | **8 个**（少 YouTube、Instagram） |
+| 支持站点 | **10 个**（小红书、X、Instagram、YouTube 全支持） | **7 个**（少 YouTube、Instagram、Iwara） |
 | 抖音去水印 / 批量主页 | ✅ | ✅ |
 | 抖音图文里的动图转 GIF | ✅ | ❌ 只保存静态图 |
 | B 站 DASH 音视频合并 | ✅ ffmpeg | ✅ 原生 MediaMuxer（不需 ffmpeg） |
@@ -21,8 +21,9 @@
 | 后台下载（切后台 / 锁屏不断） | 不适用（桌面窗口最小化照常跑） | ✅ 前台服务 + 通知进度 |
 | 本地视频库（封面 / 续播 / 倍速） | ✅ | ❌ |
 | WebP 转 MP4 / MP4 转 GIF | ✅ | ❌（抖音动图在下载时直接转 GIF） |
+| 导出视频原始帧（时间轴拖两端夹取 → 逐帧导出 + 回放） | ✅ | ❌ |
 | 保存目录 | 设置里选任意可写目录 | 系统文件管理器选目录（SAF）或手填路径 |
-| 界面 | 左侧导航 + 内容画布，八个页面 | 底部四页签：首页 / 任务 / 书架 / 设置 |
+| 界面 | 顶部标签 + 内容画布，九个页面 | 底部四页签：首页 / 任务 / 书架 / 设置 |
 
 两端解析与下载链路是独立实现，只有「思路」共用；改一个站点要两端分别改。
 
@@ -41,7 +42,7 @@ pip install -r requirements.txt
 python main.py          # 或双击 run.bat（pythonw 启动，不弹控制台）
 ```
 
-打包成 exe（`dist/` 只保留一份可运行目录，目录名 = 当前版本号）：
+打包（**默认文件夹版 onedir**；`dist/` 只保留一份可运行目录，目录名 = 当前版本号）：
 
 ```powershell
 pyinstaller --noconfirm --distpath dist/<version> build_exe.spec
@@ -50,19 +51,29 @@ powershell -ExecutionPolicy Bypass -File installer/build_setup.ps1
 ```
 
 `sync_dist.ps1` 把旧版本目录改名成当前版本（`config.json`、`edge_profile*` 登录态、视频库都跟着走），
-并把桌面与目录内快捷方式指向新路径。产物：`dist/<version>/视频下载器.exe` 与
-`dist/视频下载器-<version>-setup.exe`。版本号唯一来源是 `app_version.txt`，升级时同步
+并把桌面与目录内快捷方式指向新路径。产物：`dist/<version>/视频下载器.exe` + `dist/<version>/_internal/`
+与 `dist/视频下载器-<version>-setup.exe`。版本号唯一来源是 `app_version.txt`，升级时同步
 `installer/setup.iss` 的 `MyAppVersion` 与 `installer/README.txt`。
 
-单文件 EXE 若提示 `Could not create temporary directory!`，改用文件夹版：
+### 为什么默认文件夹版（2026-11-02 实测，v1.8.18，同一台机器同一份代码）
+
+| 形态 | 双击 → 窗口出现 | 其中「启动前解包」 | 依赖 `%TEMP%` 可写 |
+|---|---|---|---|
+| 单文件 onefile（126 MB） | 6.0 s | 4.4 s | 是 |
+| 文件夹 onedir（exe 15.6 MB + `_internal` 283 MB） | 2.6 ~ 3.2 s | 无此阶段 | 否 |
+
+单文件版每次启动都要把整包解包到 `%TEMP%\_MEIxxxxx`，解包失败就直接弹
+`Could not create temporary directory!` 并退出（不进 Python，日志里不留任何记录）。
+文件夹版的 EXE **必须与 `_internal/` 一起保留**（一起复制、一起删除），安装包按
+`installer/setup.iss` 的 `_internal\*` 规则带走。运行期临时文件用自身目录的 `.runtime-temp/`，
+只改本进程及其子进程环境，不动 Windows 用户环境变量。
+
+确实需要单文件（只想分发一个可执行文件）时显式指定：
 
 ```powershell
-$env:VDL_BUILD_MODE = "onedir"
+$env:VDL_BUILD_MODE = "onefile"
 python -m PyInstaller --noconfirm --distpath dist/portable-build build_exe.spec
 ```
-
-文件夹版的 EXE 必须与 `_internal/` 一起保留。运行期临时文件用自身目录的 `.runtime-temp/`，
-只改本进程及其子进程环境，不动 Windows 用户环境变量。
 
 测试：
 
@@ -97,12 +108,12 @@ flutter test                    # 163 项离线单测 / 组件测试
 | X (Twitter) | 敏感内容推文需填 `auth_token` / `ct0` | 两端 ✅ |
 | Instagram | 需登录的内容要填 Cookie | 仅桌面 |
 | YouTube | 高画质为音视频分离，需 ffmpeg 合并；需能访问 YouTube | 仅桌面 |
-| Iwara | 纯 HTTP（`X-Version` 签名取 Source / 540 / 360 档），免登录 | 两端 ✅ |
+| Iwara | 纯 HTTP（`X-Version` 签名取 Source / 540 / 360 档），免登录 | 仅桌面 / 安卓端已移除 |
 | Pornhub | 纯 HTTP（播放页 flashvars）；⚠️ 2026-10 起站点只发 HLS | 桌面只到解析层 / 安卓可下（拼成 `.ts`） |
 | hanime1 | 纯 HTTP + curl_cffi 指纹（站点认 TLS），免登录，页面无时长字段 | 两端 ✅ |
 | 禁漫天堂 | 种子号解析；安卓端另有整本下载 + 书架 | 两端 ✅ |
 
-安卓端三个站（Iwara / hanime1 / Pornhub 的 HLS CDN）都在 Cloudflare 后面，
+安卓端两个站（hanime1 / Pornhub 的 HLS CDN）都在 Cloudflare 后面，
 `dart:io` 的 `HttpClient` 会被 403/410，必须走 `lib/shared/net/browser_http.dart`（裸 TLS + Chrome 头序）。
 
 ## 目录结构
@@ -124,6 +135,7 @@ flutter test                    # 163 项离线单测 / 组件测试
 │   │   │   ├── video_library.py # 本地视频库：扫描、封面、续播进度与持久化
 │   │   │   ├── webp_converter.py # WebP 转 MP4 引擎
 │   │   │   ├── mp4_to_gif.py   # MP4 转 GIF 引擎（两遍调色板）
+│   │   │   ├── frame_export.py # 导出原始帧：时间段截取、逐帧导出、进度与取消
 │   │   │   ├── config.py       # 配置读写（DEFAULT_CONFIG 是默认值唯一来源）
 │   │   │   ├── workers.py      # 后台线程（登录、预览、封面）
 │   │   │   ├── proxy.py        # 系统代理读取
@@ -134,7 +146,8 @@ flutter test                    # 163 项离线单测 / 组件测试
 │   │   ├── view/               # 界面（qfluentwidgets）
 │   │   │   ├── design.py       # 设计 token：颜色 / 间距 / 字阶 / 动效
 │   │   │   ├── workspace.py    # 壳层组件：侧栏导航、面板、状态条、设置行、分段控件
-│   │   │   └── *_interface.py  # 八个页面：解析 / 批量 / 任务 / 漫画 / 本地视频 / WebP / GIF / 设置
+│   │   │   ├── frame_player.py # 导出帧的回放器（按源帧率换帧播放）
+│   │   │   └── *_interface.py  # 九个页面：解析 / 批量 / 任务 / 漫画 / 本地视频 / WebP / GIF / 原始帧 / 设置
 │   │   └── main_window.py      # 窗口壳层：标题栏 + 侧栏 + 内容画布 + 状态条
 │   ├── assets/                 # 图标资源
 │   ├── installer/              # Inno Setup 安装包脚本
@@ -147,7 +160,7 @@ flutter test                    # 163 项离线单测 / 组件测试
 │
 └── flutter_app/                # Android 端（Flutter 重写版）
     ├── lib/
-    │   ├── features/parse/     # 各站点解析器（抖音/小红书/B站/X/Iwara/Pornhub/hanime1）
+    │   ├── features/parse/     # 各站点解析器（抖音/小红书/B站/X/Pornhub/hanime1）
     │   ├── features/download/  # 多连接下载、HLS 分片、DASH 合并、任务队列、后台保活
     │   ├── features/manga/     # 禁漫接口、切片重排、书架与本地漫画阅读器
     │   ├── features/library/   # 书架页
@@ -179,7 +192,10 @@ WebP 转 MP4、MP4 转 GIF、设置八页，底部状态条常驻显示后台任
 
 - 下载完成的视频自动入库，只收真正的视频文件，同名封面图不会误入库；也可用「导入文件夹」递归导入或直接拖入。
 - 卡片墙显示封面（优先用下载封面，没有就截首帧）、标题与时长；支持搜索、按最近播放或名称排序。
-- 记住每个视频的播放位置，下次点击封面从上次位置继续；播放器支持 0.5×–2.0× 倍速、F11 全屏、进度拖动与键盘快捷键。
+- 双击卡片打开播放器并从上次位置继续（单击只选中，误点一下不会弹出播放器）；
+  播放器支持 0.5×–2.0× 倍速、F11 全屏、进度拖动与键盘快捷键。
+- 右键菜单可「复制视频到剪贴板」：登记的是文件本身（CF_HDROP），粘到文件夹里就是复制文件、
+  粘到聊天窗或输入框里得到的是路径；另有从头播放、打开文件夹与删除（可选仅移除记录或连源文件一起删）。
 - 播放进度保存在程序目录 `video_library.json`（原子写 + 备份），源视频不被修改；文件移动后记录保留，重新导入即可找回。
 - 复用系统解码器；无法播放的格式会明确报错，不会从书架静默消失。
 
@@ -257,8 +273,8 @@ python -m unittest discover -s tests -p "test_manga*.py" -v
 原来的 Kotlin + Jetpack Compose 版本已从仓库移除，安卓端统一用 Flutter 重写。以下只列关键结论，
 完整实现与踩坑见 `flutter_app/README.md`。
 
-- **站点**：抖音、小红书、B 站、X、Iwara、Pornhub、hanime1、禁漫（YouTube / Instagram 未接入）。
-- **解析全走纯 HTTP**：抖音不依赖 WebView；Iwara / hanime1 / Pornhub 的 HLS CDN 走裸 TLS + Chrome 头序。
+- **站点**：抖音、小红书、B 站、X、Pornhub、hanime1、禁漫（YouTube / Instagram / Iwara 未接入）。
+- **解析全走纯 HTTP**：抖音不依赖 WebView；hanime1 / Pornhub 的 HLS CDN 走裸 TLS + Chrome 头序。
 - **下载**：多连接分段（设置里「并发分段数」4 / 8 / 12 / 16，默认 8，每段不小于 8MB）；B 站 DASH 用原生
   MediaMuxer 合并；Pornhub 目前只有 HLS，按分片下载拼成 `.ts`；速度显示用 300ms 窗口的指数滑动平均。
 - **后台下载**：有任务时挂前台服务（`foregroundServiceType=dataSync`），通知栏显示
