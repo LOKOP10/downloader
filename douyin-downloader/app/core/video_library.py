@@ -21,6 +21,11 @@ from PySide6.QtCore import QLockFile
 VIDEO_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi", ".flv",
               ".ts", ".mpg", ".mpeg", ".wmv", ".3gp")
 
+# 截帧 / 下载封面的缓存子目录（与 video_library.json 同级）。
+# 库里只记这个目录下的相对路径：升级时 dist/<版本号> 会被整体改名，
+# 存绝对路径会让所有封面一起失效（1.8.17.0 → 1.8.18.0 就踩过）。
+COVER_DIR = "video_covers"
+
 
 def natural_key(value):
     # Tagged components remain comparable even if a name starts with a number.
@@ -199,8 +204,7 @@ class VideoLibrary:
             self._revision = None
             self.warning = f"视频记录暂时无法读取，已禁用保存；请重新加载：{error}"
 
-    @staticmethod
-    def _read(path):
+    def _read(self, path):
         with open(path, encoding="utf-8-sig") as file:
             data = json.load(file)
         if not isinstance(data, dict) or not isinstance(data.get("videos"), list):
@@ -221,8 +225,42 @@ class VideoLibrary:
                 _nonnegative_int(entry.get("resume_ms", 0)),
                 _nonnegative_int(entry.get("duration_ms", 0)),
                 str(entry.get("last_played") or ""),
-                str(entry.get("cover") or "")))
+                self._resolve_cover(str(entry.get("cover") or ""))))
         return videos
+
+    def _base_dir(self):
+        """库文件所在目录 = 程序目录（封面缓存与记录同级）。"""
+        return os.path.dirname(self.path)
+
+    def _resolve_cover(self, cover):
+        """把记录里的封面还原成当前可用的绝对路径。
+
+        两种格式都要认：新的相对路径按库目录拼回去；老的绝对路径若已失效
+        （程序目录被改名 / 搬家），按文件名去 <库目录>/video_covers 里找回来，
+        找不到才原样返回 —— 卡片会显示占位图，但不该丢掉这条记录。
+        """
+        if not cover:
+            return ""
+        base = self._base_dir()
+        if not os.path.isabs(cover):
+            return os.path.normpath(os.path.join(base, cover))
+        if os.path.isfile(cover):
+            return cover
+        candidate = os.path.join(base, COVER_DIR, os.path.basename(cover))
+        return candidate if os.path.isfile(candidate) else cover
+
+    def _store_cover(self, cover):
+        """程序目录内的封面按相对路径存盘，整个目录改名 / 搬家后依然有效。"""
+        if not cover:
+            return ""
+        base = self._base_dir()
+        try:
+            rel = os.path.relpath(cover, base)
+        except ValueError:      # 跨盘符无法相对化
+            return cover
+        if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+            return cover
+        return rel
 
     @contextmanager
     def _locked(self):
@@ -282,7 +320,12 @@ class VideoLibrary:
         with self._locked():
             if self._disk_revision() != self._revision:
                 raise OSError("视频记录已被其他实例修改，为避免丢失记录，已取消保存；请重新加载。")
-            data = {"version": 1, "videos": [asdict(item) for item in self.videos]}
+            rows = []
+            for item in self.videos:
+                row = asdict(item)
+                row["cover"] = self._store_cover(row.get("cover") or "")
+                rows.append(row)
+            data = {"version": 1, "videos": rows}
             content = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
             if os.path.exists(self.path):
                 try:

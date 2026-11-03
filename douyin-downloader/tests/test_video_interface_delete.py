@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """本地视频页：卡片右上角删除按钮 + 源文件消失后记录自动清理。
 
-覆盖两类回归（都踩过）：
+覆盖这几类回归（都踩过）：
   1. 源文件被删掉的记录一直挂在卡片墙上，点开才提示文件不存在；
-  2. 删除入口只藏在右键菜单里，用户找不到。
+  2. 删除入口只藏在右键菜单里，用户找不到；
+  3. 单击卡片就把播放器弹出来（改成双击才播）；
+  4. 右键只能删除，没法像资源管理器那样 Ctrl+C 复制文件。
 """
 import json
 import os
@@ -17,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from PySide6.QtCore import QObject, QPoint, Qt, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -139,8 +142,7 @@ class VideoInterfaceDeleteTest(unittest.TestCase):
         point = VI._delete_rect(self.page.shelf.visualItemRect(item)).center().toPoint()
         deleted, played = [], []
         self.page.shelf.on_delete = deleted.append
-        # itemClicked 连接的是 open_item 的绑定方法，替换 open_item 属性拦不住，
-        # 所以拦它真正调用的 _show_player —— 这才是「有没有播起来」的事实。
+        # 卡片的激活链路最后都会落到 _show_player，拦它才是「有没有播起来」的事实。
         self.page._show_player = played.append
         self._press(point)
         self.assertEqual(len(deleted), 1)
@@ -149,12 +151,78 @@ class VideoInterfaceDeleteTest(unittest.TestCase):
         self.page.shelf.on_delete = None
         cell = self.page.shelf.visualItemRect(item)
         self._press(QPoint(int(cell.center().x()), int(cell.center().y())))
-        self.assertEqual(len(played), 1, "点卡片其它位置应当继续播放")
+        self.assertEqual(played, [], "单击卡片其它位置也不该直接播放（双击才播）")
 
     def _press(self, point):
         QTest.mouseClick(self.page.shelf.viewport(), Qt.MouseButton.LeftButton,
                          Qt.KeyboardModifier.NoModifier, QPoint(point))
         QTest.qWait(80)
+
+    def _double_click(self, point):
+        QTest.mouseDClick(self.page.shelf.viewport(), Qt.MouseButton.LeftButton,
+                          Qt.KeyboardModifier.NoModifier, QPoint(point))
+        QTest.qWait(80)
+
+    # -------------------------------------------------------- 双击才播放
+    def test_single_click_selects_but_double_click_plays(self):
+        """单击只选中卡片；双击才打开播放器（卡片墙上误点不该弹出播放器）。"""
+        item = self.card_of("alive.mp4")
+        self.assertIsNotNone(item)
+        played = []
+        self.page._show_player = played.append
+        cell = self.page.shelf.visualItemRect(item)
+        center = QPoint(int(cell.center().x()), int(cell.center().y()))
+        self._press(center)
+        self.assertEqual(played, [], "单击卡片不应开始播放")
+        selected = [Path(w.data(Qt.ItemDataRole.UserRole).path).name
+                    for w in self.page.shelf.selectedItems()]
+        self.assertEqual(selected, ["alive.mp4"],
+                         "单击应当选中这张卡片（给用户看得见的反馈）")
+        self._double_click(center)
+        self.assertEqual([Path(v.path).name for v in played], ["alive.mp4"],
+                         "双击卡片应当播放；重复播放一次说明激活链路接了两次")
+
+    # ------------------------------------------------- 右键复制到剪贴板
+    def _trigger_menu_action(self, item, text):
+        """构造真实右键菜单并只触发指定项。
+
+        menu.exec() 会自己开事件循环把测试卡住（QMenu.exec 也打不上补丁），
+        所以这里走页面拆出来的 _build_menu：菜单内容与点击效果都还是真的。
+        """
+        menu = self.page._build_menu(item)
+        labels = [a.text() for a in menu.actions() if a.text()]
+        action = next((a for a in menu.actions() if a.text() == text), None)
+        self.assertIsNotNone(action, "右键菜单里没有「" + text + "」，实际有：" + repr(labels))
+        action.trigger()
+        QTest.qWait(60)
+        menu.deleteLater()
+        return labels
+
+    def test_context_menu_copies_video_file_to_clipboard(self):
+        """右键「复制视频到剪贴板」：登记文件本身（CF_HDROP）+ 路径文本。"""
+        item = self.card_of("alive.mp4")
+        labels = self._trigger_menu_action(item, "复制视频到剪贴板")
+        self.assertIn("复制视频到剪贴板", labels)
+        self.assertIn("播放 / 继续播放", labels)
+        self.assertIn("删除…", labels)
+        mime = QGuiApplication.clipboard().mimeData()
+        self.assertIsNotNone(mime)
+        # QUrl 会把反斜杠规范成 /，比较前统一一下
+        copied = [os.path.normcase(os.path.normpath(u.toLocalFile())) for u in mime.urls()]
+        self.assertEqual(copied, [os.path.normcase(os.path.normpath(str(self.alive)))],
+                         "剪贴板里应当是文件本身，粘到文件夹里才能真复制出文件")
+        self.assertEqual(mime.text(), str(self.alive), "同时要带路径文本，粘到输入框里不空手")
+        self.assertIn("已复制到剪贴板", self.page.status.text())
+
+    def test_copy_missing_file_reports_instead_of_copying(self):
+        """源文件不在了就别往剪贴板塞一条死路径，直接说清楚。"""
+        item = self.card_of("gone.mp4")
+        self.assertIsNotNone(item)
+        QGuiApplication.clipboard().clear()
+        self._trigger_menu_action(item, "复制视频到剪贴板")
+        self.assertIn("源文件已不存在", self.page.status.text())
+        mime = QGuiApplication.clipboard().mimeData()
+        self.assertTrue(mime is None or not mime.urls(), "文件不在了不该复制进剪贴板")
 
     # --------------------------------------------------------- 删除三选一
     def test_delete_choices_keep_or_remove_source_file(self):
