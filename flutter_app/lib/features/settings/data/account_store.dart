@@ -85,7 +85,6 @@ class AccountStore extends ChangeNotifier {
     SitePlatform.xhs: ['web_session', 'a1', 'gid'],
     SitePlatform.bili: ['SESSDATA', 'bili_jct'],
     SitePlatform.x: ['auth_token', 'ct0'],
-    SitePlatform.iwara: ['token', 'session'],
     SitePlatform.pornhub: ['il', 'ss'],
     SitePlatform.hanime1: ['cf_clearance', 'session'],
     SitePlatform.jm: ['AVS', 'session'],

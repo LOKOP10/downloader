@@ -22,13 +22,12 @@ lib/
 │       └── browser_http.dart      Cloudflare 专用：裸 TLS + Chrome 头序（HttpClient 会被 403/410）
 │
 └── features/                      业务功能，一个目录一件事
-    ├── parse/                     站点解析（抖音、小红书、B站、X、Iwara、Pornhub、hanime1）
+    ├── parse/                     站点解析（抖音、小红书、B站、X、Pornhub、hanime1）
     │   ├── media_info.dart        MediaInfo / MediaQuality / ParseException（含 referer 覆盖）
     │   ├── douyin_parser.dart     抖音：ttwid 会话 + 分享页 SSR，纯 HTTP 无 WebView
     │   ├── xhs_parser.dart        小红书：短链展开 + 详情页 SSR（__INITIAL_STATE__）
     │   ├── bili_parser.dart       B站：view + playurl（DASH 高清 + durl 兜底）
     │   ├── x_parser.dart          X（推特）：GraphQL(带 Cookie) → syndication → guest GraphQL
-    │   ├── iwara_parser.dart      Iwara：详情接口 + X-Version 签名取档位（走 browser_http）
     │   ├── pornhub_parser.dart    Pornhub：flashvars 取直链，mp4 优先 / HLS 兜底
     │   ├── hanime1_parser.dart    hanime1：页面 <source> 三档（走 browser_http）
     │   ├── html_text.dart         HTML 实体还原 / 去标签（og:title 这类字段用得上）
@@ -83,7 +82,6 @@ lib/
 - `test/xhs_parser_test.dart`：小红书 SSR 解析（离线样本，不联网）
 - `test/bili_parser_test.dart`：B站 view + playurl 解析（离线样本，不联网）
 - `test/x_parser_test.dart`：X 推文解析 + syndication token（离线样本，不联网）
-- `test/iwara_parser_test.dart`：Iwara 作品 ID / X-Version 签名（对照 Python hashlib）/ 档位排序
 - `test/pornhub_parser_test.dart`：Pornhub viewkey / flashvars 花括号配对 / 时长与标题
 - `test/hanime1_parser_test.dart`：hanime1 视频 ID / `<source>` 档位 / 标题与封面
 - `test/download_naming_test.dart`：落盘扩展名与文件名清洗
@@ -93,7 +91,6 @@ lib/
 - `tool/check_bili.dart`：B站解析 + 下载端到端实测（`dart run tool/check_bili.dart <链接> [--dry]`）
 - `tool/check_x.dart`：X 解析 + 下载端到端实测（`dart run tool/check_x.dart <推文链接> [--dry]`）
 - `tool/check_jm.dart`：禁漫解析 + 首图下载实测（`dart run tool/check_jm.dart <车号>`）
-- `tool/check_iwara.dart`：Iwara 解析 + 下载端到端（`--proxy` 桌面实测用）
 - `tool/check_pornhub.dart`：Pornhub 解析 + HLS 分片下载端到端（`--proxy`）
 - `tool/check_hanime1.dart`：hanime1 解析 + 下载端到端（`--proxy`）
 - `tool/check_downloader.dart`：下载引擎单连接 vs 多连接一致性 + 取消

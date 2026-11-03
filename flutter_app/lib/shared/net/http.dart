@@ -24,7 +24,6 @@ class AppHttp {
         SitePlatform.xhs => 'https://www.xiaohongshu.com/',
         SitePlatform.bili => 'https://www.bilibili.com/',
         SitePlatform.x => 'https://x.com/',
-        SitePlatform.iwara => 'https://www.iwara.tv/',
         SitePlatform.pornhub => 'https://www.pornhub.com/',
         SitePlatform.hanime1 => 'https://hanime1.me/',
         SitePlatform.jm => 'https://18comic.vip/',

@@ -2,7 +2,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 下载相关设置（目前只有并发连接数）。
 ///
-/// 为什么单独存：并发数决定「一个文件切几段下」。Iwara 这类 CDN 对单连接
+/// 为什么单独存：并发数决定「一个文件切几段下」。部分站点 CDN 对单连接
 /// 限速明显（实测单连接约 0.3 MB/s），多开几段能成倍提速；但站点限流强度
 /// 不同，所以做成可调、持久化，默认 8。
 abstract final class DownloadSettings {

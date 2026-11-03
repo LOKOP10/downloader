@@ -53,7 +53,7 @@ class BrowserBytes {
 /// Cloudflare 站点专用的「浏览器化」HTTPS 请求。
 ///
 /// 为什么不能直接用 `dart:io` 的 `HttpClient`：
-/// iwara.tv / api.iwara.tv / hanime1.me，以及 **Pornhub 的 HLS CDN
+/// hanime1.me，以及 **Pornhub 的 HLS CDN
 /// （hv-h.phncdn.com）** 都在 Cloudflare 后面，并开了「浏览器完整性检查」。
 /// **同样一组请求头**，用 `HttpClient` 发出去一律回 403（页面）或 410（m3u8，
 /// 实测），换成裸 TLS（`SecureSocket`）按 Chrome 的顺序手写请求行，同一个 URL、
@@ -68,7 +68,7 @@ class BrowserBytes {
 /// 边界：
 ///  · 只支持 GET，只支持 https；
 ///  · 不支持 br（Dart 没有 brotli 解码器），所以请求头里只要 gzip, deflate；
-///  · 不跟随跳转（三个站点都不需要，调用方按需自己处理 30x）；
+///  · 不跟随跳转（用到的站点都不需要，调用方按需自己处理 30x）；
 ///  · 每次请求都新建 TCP + TLS（约 100~200ms），分片多得靠并发摊平。
 abstract final class BrowserHttp {
   /// 与 `AppHttp.uaDesktop` 一致：CF 认这一套 UA 与头组合，换 UA 会重新被拦。
@@ -83,7 +83,7 @@ abstract final class BrowserHttp {
 
   /// GET 一个页面 / 接口，按 UTF-8 解成字符串。
   ///
-  /// [referer] 会写进 `Referer`；[extra] 追加自定义头（如 iwara 的 `X-Version`）；
+  /// [referer] 会写进 `Referer`；[extra] 追加自定义头；
   /// [cors] 为真时按 XHR 的 Sec-Fetch-* 组合发，拿 JSON 接口更自然。
   static Future<BrowserResponse> get(
     String url, {

@@ -6,7 +6,7 @@ import 'package:vdl/shared/site.dart';
 /// 视频预览：流式播放远程地址（不落盘）。
 ///
 /// 跨平台复用：只依赖「播放地址 + 站点」。抖音 CDN 会校验 UA / Referer，
-/// 所以请求头按站点补；以后 B站 / Iwara 等给出播放地址也能直接用。
+/// 所以请求头按站点补；以后其它站点给出播放地址也能直接用。
 class VideoViewer extends StatefulWidget {
   const VideoViewer({
     super.key,
