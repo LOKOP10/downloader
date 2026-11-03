@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # 把 dist 下旧的版本目录改名为当前版本，并同步快捷方式。
 # 约定（用户要求）：dist 只保留一份可运行目录，名字永远等于当前版本号；
 # 升级时不要新建 <新版本> 目录，而是运行本脚本把旧目录改名过去。
@@ -31,14 +31,35 @@ if ($others.Count -gt 1) {
 if ($others.Count -eq 1) {
     $old = $others[0]
     if (Test-Path -LiteralPath $target) {
+        # 文件夹版（onedir）产物是 exe + _internal/；单文件版只有 exe。两种都放行，
+        # 其它东西（用户数据等）一律不动，交给人处理。
+        $allowed = @($exeName, '_internal')
         $left = @(Get-ChildItem -LiteralPath $target -Force)
-        if ($left.Count -gt 1 -or ($left.Count -eq 1 -and $left[0].Name -ne $exeName)) {
-            throw ("Target dir already has content other than the exe, please resolve manually: " + $target)
+        $extra = @($left | Where-Object {
+            $allowed -notcontains $_.Name -and
+            -not ($_.PSIsContainer -and (Test-Path -LiteralPath (Join-Path $_.FullName $exeName)))
+        })
+        if ($extra.Count -gt 0) {
+            throw ("Target dir already has content other than the build output, please resolve manually: " +
+                   $target + " -> " + (($extra | ForEach-Object { $_.Name }) -join ', '))
         }
         Remove-Item -LiteralPath $target -Recurse -Force
     }
     Rename-Item -LiteralPath $old.FullName -NewName $version
     Write-Output ('renamed: ' + $old.Name + ' -> ' + $version)
+}
+# PyInstaller 文件夹版（COLLECT）会多套一层以程序名命名的子目录，产物实际落在
+# dist/<version>/<程序名>/ 里。这里把内容上提一级，让两种形态都收敛到 dist/<version>/
+# 下的同一布局（exe + _internal/），安装脚本和快捷方式只认这一层。
+if (Test-Path -LiteralPath $target) {
+    $subdirs = @(Get-ChildItem -LiteralPath $target -Directory -Force -ErrorAction SilentlyContinue)
+    foreach ($sd in $subdirs) {
+        if (Test-Path -LiteralPath (Join-Path $sd.FullName $exeName)) {
+            Get-ChildItem -LiteralPath $sd.FullName -Force | Move-Item -Destination $target -Force
+            Remove-Item -LiteralPath $sd.FullName -Recurse -Force
+            Write-Output ('flattened: ' + $sd.Name + ' -> ' + $version)
+        }
+    }
 }
 if (-not (Test-Path -LiteralPath $targetExe)) {
     throw ('Missing ' + $targetExe + ', build the exe first.')

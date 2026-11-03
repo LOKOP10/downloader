@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller 打包配置：单文件、无控制台窗口、收集 qfluentwidgets 资源"""
+"""PyInstaller 打包配置：默认文件夹版（onedir）、无控制台窗口、收集 qfluentwidgets 资源"""
 import os
 from PyInstaller.utils.hooks import collect_all
 
@@ -132,8 +132,11 @@ for _name in ('libssl-3-x64.dll', 'libcrypto-3-x64.dll', 'libssl-3.dll', 'libcry
 
 pyz = PYZ(a.pure)
 
-# 文件夹版无需启动时解包至系统TEMP；默认保留单文件构建兼容原安装流程。
-_folder_build = os.environ.get("VDL_BUILD_MODE") == "onedir"
+# 默认构建文件夹版（onedir）。单文件版每次启动都要把整包解包到系统 TEMP：
+# 2026-11-02 实测 v1.8.18 单文件双击到窗口 6.0s，其中 4.4s 花在解包上；同一份代码的
+# 文件夹版实测 2.6~3.2s，且不再依赖 %TEMP% 可写（TEMP 建不了目录时单文件直接弹
+# "Could not create temporary directory!" 并退出）。需要单文件时显式 VDL_BUILD_MODE=onefile。
+_folder_build = os.environ.get("VDL_BUILD_MODE", "onedir") != "onefile"
 exe = EXE(
     pyz,
     a.scripts,

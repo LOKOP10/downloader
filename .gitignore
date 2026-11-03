@@ -70,6 +70,8 @@ manga_library.json*
 .workbuddy/
 .workbuddy-ai/
 .impeccable.md
+# dsh-ops 插件的面板运行态（本机工具产物，非项目源码）
+.dsh-ops/
 
 # ---------- 临时探测 / 调试脚本 ----------
 # 注意 `_scratch_*/`（带斜杠）只匹配"目录"，匹配不到 `_scratch_verify_xxx.py`
