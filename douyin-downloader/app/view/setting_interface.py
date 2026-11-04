@@ -21,7 +21,7 @@ import os
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QFileDialog, QWidget
+from PySide6.QtWidgets import QFileDialog, QInputDialog, QWidget
 from qfluentwidgets import (ComboBox, FluentIcon as FIF, InfoBar,
                             InfoBarPosition, PushButton, ScrollArea, SpinBox,
                             SwitchButton, Theme, setTheme)
@@ -224,6 +224,14 @@ class SettingInterface(ScrollArea):
         self._row(panel, "每文件连接数",
                   "单个文件拆成几条连接（1-32）。并发任务多时会自动摊薄",
                   control=self.connSpin, icon=FIF.LINK)
+
+        # 网络代理：requests 不读系统代理，iwara 的下载 CDN（robin.iwara.tv）
+        # 直连几乎建不了连，表现是每 4MB 分块 10 秒零字节、反复重连。
+        self.proxyBtn = PushButton("修改", panel)
+        self.proxyBtn.clicked.connect(self._on_edit_proxy)
+        self.proxyRow = self._row(
+            panel, "网络代理", self._proxy_desc_text(),
+            control=self.proxyBtn, icon=FIF.GLOBE)
 
         self.concurrentSpin = SpinBox(panel)
         self.concurrentSpin.setFixedWidth(_CTRL_W)
@@ -486,6 +494,60 @@ class SettingInterface(ScrollArea):
         """每文件连接数：立即对后续下载生效（已在跑的连接不动）"""
         self.ctx.config.set("segment_connections", v)
         self.ctx.manager.set_connections(v)
+
+    # ------------------------------------------------------------------ #
+    # 网络代理
+    def _proxy_desc_text(self) -> str:
+        from ..core import proxy
+        text, active = proxy.describe()
+        if active:
+            return text + "；下载与解析请求都走它"
+        return text + "；外网站（iwara / pornhub）直连容易超时"
+
+    def _on_edit_proxy(self):
+        from ..core import proxy
+        modes = list(proxy.MODES)
+        labels = [proxy.MODE_LABELS[m] for m in modes]
+        try:
+            current = modes.index(proxy.current_mode())
+        except ValueError:
+            current = 0
+        label, ok = QInputDialog.getItem(
+            self, "网络代理",
+            "跟随系统 = 用 Windows 的系统代理（Clash 开着就选中它）\n"
+            "手动 = 自己填 host:port\n"
+            "直连 = 不走代理（国内站更稳，外网站可能超时）",
+            labels, current, False)
+        if not ok or not label:
+            return
+        mode = modes[labels.index(label)]
+        value = proxy.manual_value()
+        if mode == proxy.MODE_MANUAL:
+            text, ok2 = QInputDialog.getText(
+                self, "网络代理",
+                "填 Clash 的 HTTP 端口：只写端口号（如 7897）会自动补成 "
+                "127.0.0.1，也可写全 host:port",
+                text=value or "")
+            if not ok2:
+                return
+            value = text.strip()
+            if not proxy.normalize_manual(value):
+                InfoBar.error(
+                    "地址无效",
+                    "请填 host:port，例如 127.0.0.1:7897（或直接填端口号 7897）",
+                    duration=4000, position=InfoBarPosition.TOP, parent=self)
+                return
+        self.ctx.config.set("proxy_mode", mode)
+        self.ctx.config.set("proxy_value", value)
+        proxy.configure(mode, value)
+        self.proxyRow.set_desc(self._proxy_desc_text())
+        text, active = proxy.describe()
+        if active:
+            InfoBar.success("网络代理已更新", text, duration=3000,
+                            position=InfoBarPosition.TOP, parent=self)
+        else:
+            InfoBar.warning("网络代理未生效", text, duration=4000,
+                            position=InfoBarPosition.TOP, parent=self)
 
     def _on_theme_changed(self, key: str):
         self.ctx.config.set("theme", key)

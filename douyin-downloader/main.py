@@ -44,6 +44,13 @@ def main():
     from app import __version__
 
     config = Config(os.path.join(BASE_DIR, "config.json"))
+    # 网络代理必须在任何请求发出之前落地：requests 不读系统代理，
+    # 不开这一步 iwara 的下载 CDN（robin.iwara.tv）在国内直连就建不了连。
+    from app.core import proxy
+    proxy.configure(config.get("proxy_mode", proxy.MODE_SYSTEM),
+                    config.get("proxy_value", ""))
+    proxy.install()
+    log.info("网络代理：%s", proxy.describe()[0])
     # 动效开关要在建窗口前落地：首屏的页面切换动效读的就是这个标志
     D.set_reduce_motion(bool(config.get("reduce_motion", False)))
     # 强调色同理：一堆控件的选中态/焦点态在构造时就取这个色
