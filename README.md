@@ -11,7 +11,7 @@
 
 | 能力 | Windows 桌面端 | Android 端 |
 |---|---|---|
-| 支持站点 | **10 个**（小红书、X、Instagram、YouTube 全支持） | **7 个**（少 YouTube、Instagram、Iwara） |
+| 支持站点 | **9 个**（小红书、X、Instagram、YouTube 全支持） | **7 个**（少 YouTube、Instagram、Iwara） |
 | 抖音去水印 / 批量主页 | ✅ | ✅ |
 | 抖音图文里的动图转 GIF | ✅ | ❌ 只保存静态图 |
 | B 站 DASH 音视频合并 | ✅ ffmpeg | ✅ 原生 MediaMuxer（不需 ffmpeg） |
@@ -108,7 +108,6 @@ flutter test                    # 163 项离线单测 / 组件测试
 | X (Twitter) | 敏感内容推文需填 `auth_token` / `ct0` | 两端 ✅ |
 | Instagram | 需登录的内容要填 Cookie | 仅桌面 |
 | YouTube | 高画质为音视频分离，需 ffmpeg 合并；需能访问 YouTube | 仅桌面 |
-| Iwara | 纯 HTTP（`X-Version` 签名取 Source / 540 / 360 档），免登录 | 仅桌面 / 安卓端已移除 |
 | Pornhub | 纯 HTTP（播放页 flashvars）；⚠️ 2026-10 起站点只发 HLS | 桌面只到解析层 / 安卓可下（拼成 `.ts`） |
 | hanime1 | 纯 HTTP + curl_cffi 指纹（站点认 TLS），免登录，页面无时长字段 | 两端 ✅ |
 | 禁漫天堂 | 种子号解析；安卓端另有整本下载 + 书架 | 两端 ✅ |

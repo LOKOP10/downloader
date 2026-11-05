@@ -17,8 +17,6 @@ INSTAGRAM_HOSTS = ("instagram", "cdninstagram", "fbcdn")
 BILIBILI_HOSTS = ("bilibili", "bilivideo", "hdslb", "akamaized", "b23.tv")
 XIAOHONGSHU_HOSTS = ("xhscdn", "xiaohongshu", "xhslink")
 JMCOMIC_HOSTS = ("18comic", "jmcomic", "jmapinode", "jmapiproxy", "jm-comic")
-# iwara.tv 覆盖 www / api / files / filesq，以及下载用的角色名 CDN（bailu / herta / …）
-IWARA_HOSTS = ("iwara.tv",)
 # pornhub.com 覆盖 www / 接口；视频直链落在 ev.phncdn.com 等 phncdn 域，
 # 该 CDN **不带 Referer 会回 404**，所以必须认出它并按平台给 Referer
 PORNHUB_HOSTS = ("pornhub.com", "phncdn.com")
@@ -39,7 +37,6 @@ PLATFORM_HOSTS = {
     "bilibili": BILIBILI_HOSTS,
     "xiaohongshu": XIAOHONGSHU_HOSTS,
     "jmcomic": JMCOMIC_HOSTS,
-    "iwara": IWARA_HOSTS,
     "pornhub": PORNHUB_HOSTS,
     "hanime1": HANIME1_HOSTS,
     "youtube": YOUTUBE_HOSTS,
@@ -140,8 +137,6 @@ def platform_of_source(source: str) -> str:
         return "instagram"
     if src in ("jm", "18comic"):
         return "jmcomic"
-    if src in ("iwara",):
-        return "iwara"
     if src in ("ph", "pornhub"):
         return "pornhub"
     if src in ("hanime", "hanime1.me", "hanime1me"):
@@ -176,7 +171,6 @@ def referer_for(url: str) -> str:
         "bilibili": "https://www.bilibili.com/",
         "xiaohongshu": "https://www.xiaohongshu.com/",
         "jmcomic": "https://18comic.vip/",
-        "iwara": "https://www.iwara.tv/",
         "pornhub": "https://www.pornhub.com/",
         "hanime1": "https://hanime1.me/",
         "youtube": "https://www.youtube.com/",

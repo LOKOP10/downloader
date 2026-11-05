@@ -65,7 +65,7 @@ class LoopbackTest(unittest.TestCase):
             self.assertTrue(proxy.is_loopback(url), url)
 
     def test_public_not_loopback(self):
-        for url in ("https://robin.iwara.tv/x", "https://api.iwara.tv/video/1"):
+        for url in ("https://www.pornhub.com/view_video.php?viewkey=1", "https://hanime1.me/watch?v=1"):
             self.assertFalse(proxy.is_loopback(url), url)
 
 

@@ -45,7 +45,7 @@ def main():
 
     config = Config(os.path.join(BASE_DIR, "config.json"))
     # 网络代理必须在任何请求发出之前落地：requests 不读系统代理，
-    # 不开这一步 iwara 的下载 CDN（robin.iwara.tv）在国内直连就建不了连。
+    # 不开这一步 pornhub / hanime1 这类站点在国内直连就建不了连。
     from app.core import proxy
     proxy.configure(config.get("proxy_mode", proxy.MODE_SYSTEM),
                     config.get("proxy_value", ""))
