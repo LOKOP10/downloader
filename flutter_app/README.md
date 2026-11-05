@@ -1,7 +1,6 @@
 # 视频下载器 · Flutter 重做版（Android）
 
-用 Flutter 重写的安卓端：粘贴分享链接 → 解析 → 多连接下载。
-与旧的 Kotlin 原生版（`com.xd.vdl`）包名不同（本包 `com.xd.vdl.flutter`），可共存安装。
+Flutter 安卓端：粘贴分享链接 → 解析 → 多连接下载。包名 `com.xd.vdl.flutter`。
 
 ## 已支持的站点
 
