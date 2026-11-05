@@ -167,7 +167,7 @@ flutter test                    # 163 项离线单测 / 组件测试
     │   └── shared/             # 站点枚举、链接识别、HTTP（含 Cloudflare 专用 browser_http）
     ├── test/                   # 离线单测 / 组件测试
     ├── tool/                   # 端到端实测脚本（check_*.dart）
-    └── android/                # Flutter 的 Android 工程（Kotlin 桥：Muxer / 图片重排 / MediaStore / 前台服务）
+    └── android/                # Flutter 的 Android 工程（原生桥：Muxer / 图片重排 / MediaStore / 前台服务）
 ```
 
 仓库只提交源码。`dist/`、`build/`、`.venv/`、`edge_profile/`、`*.exe`、`*.apk` 等构建产物和敏感目录

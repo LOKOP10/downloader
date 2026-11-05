@@ -143,7 +143,7 @@ dart run tool/check_downloader.dart           # 下载引擎单/多连接一致�
 - 1080P 以上只有 DASH 流，音视频是分开的两个 `.m4s`。
 - 下载流程：视频轨 → 音频轨（都放系统临时目录）→ 原生 `MediaMuxer` 合并 → 写进下载目录；
   中间文件用完即删，进度条按「视频+音频」总字节走，合并阶段停在 99%。
-- 原生实现在 `android/app/src/main/kotlin/com/xd/vdl/MuxerBridge.kt`，
+- 原生桥接在 `android/app/src/main/` 下的 `MuxerBridge` 源文件里，
   通过 `MethodChannel("vdl/muxer")` 暴露 `merge` / `cancel`；删除/合并都不依赖 ffmpeg。
 - 同一清晰度有 avc1 / hev1 / av01 三种编码时优先 H.264（合并最稳、老机器也能播）。
 - B 站的 `.m4s` 只认**桌面 UA**（安卓 UA 直接 403），所以 B 站下载统一用桌面 UA；
