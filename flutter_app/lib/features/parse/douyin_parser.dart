@@ -6,7 +6,7 @@ import 'media_info.dart';
 
 /// 抖音解析：**纯 HTTP**，不依赖 WebView。
 ///
-/// 关键点（实测得出，与 Kotlin 端注释一致）：
+/// 关键点（实测得出）：
 ///   1. 冷会话请求分享页只会拿到 32KB 空壳（有 _ROUTER_DATA 但没有 play_addr）；
 ///   2. 第一次响应会下发 ttwid，**带这个 cookie 再请求同一页**就返回 41KB
 ///      完整数据，含 aweme_id / video.bit_rate / play_addr；
