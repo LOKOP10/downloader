@@ -24,7 +24,7 @@ DEFAULT_CONFIG = {
     "timeout": 15,
     "segment_download": True,     # 多连接分段下载（IDM 式加速）
     "segment_connections": 8,     # 每文件并发连接数（IDM 默认 8，范围 1-32）
-    # 网络代理：requests 不读系统代理，iwara / pornhub 这类站直连会超时。
+    # 网络代理：requests 不读系统代理，pornhub / hanime1 这类站直连会超时。
     # system = 跟随 Windows 系统代理；manual = 用手填的 host:port；off = 直连。
     "proxy_mode": "system",
     "proxy_value": "",            # 手动模式下的 host:port（只填端口会补 127.0.0.1）

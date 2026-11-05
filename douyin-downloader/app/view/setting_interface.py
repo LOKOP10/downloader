@@ -225,8 +225,8 @@ class SettingInterface(ScrollArea):
                   "单个文件拆成几条连接（1-32）。并发任务多时会自动摊薄",
                   control=self.connSpin, icon=FIF.LINK)
 
-        # 网络代理：requests 不读系统代理，iwara 的下载 CDN（robin.iwara.tv）
-        # 直连几乎建不了连，表现是每 4MB 分块 10 秒零字节、反复重连。
+        # 网络代理：requests 不读系统代理，外网站的 CDN 直连常建不了连，
+        # 表现是分块下载反复超时重连。
         self.proxyBtn = PushButton("修改", panel)
         self.proxyBtn.clicked.connect(self._on_edit_proxy)
         self.proxyRow = self._row(
@@ -502,7 +502,7 @@ class SettingInterface(ScrollArea):
         text, active = proxy.describe()
         if active:
             return text + "；下载与解析请求都走它"
-        return text + "；外网站（iwara / pornhub）直连容易超时"
+        return text + "；外网站（pornhub / hanime1）直连容易超时"
 
     def _on_edit_proxy(self):
         from ..core import proxy

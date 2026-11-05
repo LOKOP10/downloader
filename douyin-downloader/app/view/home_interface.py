@@ -42,7 +42,7 @@ log = get_logger("home")
 
 # 输入框下的一行能力提示（12px 三级色）。平台清单只在这里出现一次 ——
 # 页头再说一遍、按钮再说一遍就是三重复读（设计原则 3）。
-_PLATFORM_LINE = ("抖音 · B站 · 小红书 · X · Instagram · YouTube · Iwara · Pornhub · hanime1 · 禁漫"
+_PLATFORM_LINE = ("抖音 · B站 · 小红书 · X · Instagram · YouTube · Pornhub · hanime1 · 禁漫"
                   "　｜　视频 / 图集 / 漫画车号")
 
 

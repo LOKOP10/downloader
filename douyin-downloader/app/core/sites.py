@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""多平台单作品解析路由：抖音 / X / Instagram / Bilibili / 小红书 / YouTube / Iwara / Pornhub / hanime1 / 禁漫
+"""多平台单作品解析路由：抖音 / X / Instagram / Bilibili / 小红书 / YouTube / Pornhub / hanime1 / 禁漫
 
 - 抖音：走 parser.DouyinParser（分享页 RENDER_DATA，最高码率）
 - YouTube：交给 yt-dlp 解签名/JS 挑战拿 formats，本程序只挑 mp4 档位
@@ -9,7 +9,6 @@
 - Bilibili：wbi 签名 API + DASH 合并
 - 小红书：登录态走 curl_cffi + 本地签名直连 /api/sns/web/v1/feed；
   未登录 / 失败时回退 Playwright 渲染 SSR noteCard（免登录可用）
-- Iwara：纯 HTTP —— /video/<id> 拿详情，带 X-Version 签名取档位表（Source 原始档）
 - Pornhub：纯 HTTP —— 页面 flashvars 里拿 get_media 签名端点，换到 4 档 mp4 直链
 - hanime1：纯 HTTP + curl_cffi 指纹（站点认 TLS，requests 会 SSL EOF）——
   页面 <video> 里直接挂 3 档 <source>，换到 hembed CDN 的签名 mp4 直链
@@ -54,7 +53,7 @@ def detect_platform(url: str) -> str:
         return "jmcomic"
     raise ParseError(
         f"暂不支持该链接（{urllib.parse.urlparse(url).netloc}）。目前支持 "
-        "抖音 / X / Instagram / B站 / 小红书 / YouTube / Iwara / Pornhub / "
+        "抖音 / X / Instagram / B站 / 小红书 / YouTube / Pornhub / "
         "hanime1 / 禁漫")
 
 
@@ -124,8 +123,6 @@ def _parse_share(text: str, ctx: SiteContext = None, **legacy) -> VideoInfo:
             return parse_xiaohongshu(url, ctx.xhs_cookie, ctx.xhs_profile_dir)
         if platform == "instagram":
             return parse_instagram(url, ctx.ins_cookie, ctx.ins_profile_dir)
-        if platform == "iwara":
-            return parse_iwara(url)
         if platform == "pornhub":
             return parse_pornhub(url)
         if platform == "hanime1":
@@ -138,7 +135,7 @@ def _parse_share(text: str, ctx: SiteContext = None, **legacy) -> VideoInfo:
             return parse_jmcomic(url, ctx.jm_cookie)
         raise ParseError(
             f"暂不支持该链接（{urllib.parse.urlparse(url).netloc}）。目前支持 "
-            "抖音 / X / Instagram / B站 / 小红书 / YouTube / Iwara / Pornhub / "
+            "抖音 / X / Instagram / B站 / 小红书 / YouTube / Pornhub / "
             "hanime1 / 禁漫")
     kind, jmid = try_parse_jm(text)
     if jmid:
@@ -2444,285 +2441,6 @@ def _xhs_duration(text: str) -> int:
     for p in parts:
         sec = sec * 60 + p
     return sec * 1000
-
-
-# --------------------------------------------------------------------- #
-# Iwara（iwara.tv）
-# --------------------------------------------------------------------- #
-IWARA_HOST = "https://www.iwara.tv"
-IWARA_API = "https://api.iwara.tv"
-# 请求 fileUrl 时必须带的 X-Version 签名后缀。2026-09 实测值，前端 main.js 里
-# 明文写着：sha1(`${file_id}_${expires}_${SALT}`)。**换过一轮**——旧的
-# `5nFp9kmbNnHdAFhaqMvt` 仍能返回 200，但只给 360/preview 两档（静默降级，
-# 不报错），带上正确签名才会返回含 Source 的完整档位。
-IWARA_SIGN_SALT = "mSvL05GfEmeEmsEYfGCnVpEjYgTJraJN"
-# 作品 ID：/video/<id> 与 /image/<id>（id 是大小写敏感的字母数字串）
-IWARA_ID_RE = re.compile(r'iwara\.tv/(?:video|image)/([A-Za-z0-9]+)', re.I)
-# `preview` 是站点自己的预览片段，不算可选画质
-IWARA_SKIP_FORMATS = ("preview",)
-# 档位接口每请求一次就重新签发一批角色名 CDN 域名（bailu / herta / naja / …），
-# 多取一轮就多一组备用地址 —— 实测个别域名会连不上，有备用才不至于整单失败
-IWARA_FORMAT_ROUNDS = 2
-
-
-def iwara_video_id(url: str) -> str:
-    """从 iwara 链接里取作品 ID（video / image 均可），识别失败返回空串"""
-    m = IWARA_ID_RE.search(url or "")
-    return m.group(1) if m else ""
-
-
-def _iwara_headers() -> dict:
-    return {
-        "User-Agent": PC_UA,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": IWARA_HOST + "/",
-        "Origin": IWARA_HOST,
-    }
-
-
-def _iwara_sign(file_id: str, expires: str) -> str:
-    """X-Version 签名（算法来自前端 main.js）"""
-    raw = f"{file_id}_{expires}_{IWARA_SIGN_SALT}"
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
-
-
-def _iwara_abs(u: str) -> str:
-    """档位地址以 //host/path 给出，补上 scheme"""
-    u = (u or "").strip()
-    if u.startswith("//"):
-        return "https:" + u
-    if u.startswith("/"):
-        return IWARA_HOST + u
-    return u
-
-
-def _iwara_epoch(text: str) -> int:
-    """'2026-09-26T08:45:45.000Z' -> epoch 秒"""
-    if not text:
-        return 0
-    try:
-        import datetime as _dt
-        s = str(text).replace("Z", "+00:00")
-        return int(_dt.datetime.fromisoformat(s).timestamp())
-    except Exception:  # noqa: BLE001
-        return 0
-
-
-def _iwara_detail(vid: str) -> dict:
-    """取作品详情（含 fileUrl / file / user / title）"""
-    try:
-        r = requests.get(f"{IWARA_API}/video/{vid}", headers=_iwara_headers(),
-                         timeout=(10, 25))
-    except Exception as e:  # noqa: BLE001
-        raise ParseError(
-            f"Iwara 接口连接失败（{e}）。iwara.tv 需要能出网，请确认代理已开启"
-        ) from e
-    if r.status_code == 404:
-        raise ParseError(f"Iwara 作品 {vid} 不存在或已删除")
-    if r.status_code != 200:
-        raise ParseError(f"Iwara 详情接口返回 HTTP {r.status_code}")
-    try:
-        return r.json()
-    except Exception as e:  # noqa: BLE001
-        raise ParseError("Iwara 详情接口返回的不是 JSON（可能被拦截，检查代理）") from e
-
-
-def _iwara_formats(detail: dict) -> dict:
-    """请求 fileUrl 拿档位表：{档位名: [主地址, 备用地址, …]}（保持服务端顺序）
-
-    服务端每次都给一批随机角色名 CDN 域名，多请求一轮就多一组备用地址。
-    拿不到任何档位时返回空字典，由调用方决定是否重取详情。
-    """
-    file_url = (detail.get("fileUrl") or "").strip()
-    if not file_url:
-        return {}
-    u = urllib.parse.urlparse(file_url)
-    q = urllib.parse.parse_qs(u.query)
-    expires = (q.get("expires") or [""])[0]
-    fid = u.path.rstrip("/").split("/")[-1]
-    if not expires or not fid:
-        return {}
-    base = (f"{u.scheme}://{u.netloc}{u.path}?expires={expires}"
-            f"&hash={(q.get('hash') or [''])[0]}")
-    # 前端会把 download 参数设成 "Iwara - <标题> [<id>].mp4"（空格用 + 编码）
-    dl_name = urllib.parse.quote_plus(
-        f"Iwara - {detail.get('title') or ''} [{detail.get('id') or ''}].mp4")
-    headers = dict(_iwara_headers(), **{"X-Version": _iwara_sign(fid, expires)})
-
-    out: dict = {}
-    for _ in range(IWARA_FORMAT_ROUNDS):
-        try:
-            r = requests.get(base + "&download=" + dl_name, headers=headers,
-                             timeout=(10, 25))
-            if r.status_code != 200:
-                break
-            fmts = r.json()
-        except Exception:  # noqa: BLE001 - 一轮失败不影响已拿到的
-            break
-        if not isinstance(fmts, list) or not fmts:
-            break
-        for f in fmts:
-            if not isinstance(f, dict):
-                continue
-            name = str(f.get("name") or "").strip()
-            src = f.get("src") or {}
-            url = _iwara_abs(src.get("download") or src.get("view") or "")
-            if not name or not url:
-                continue
-            bucket = out.setdefault(name, [])
-            if url not in bucket:
-                bucket.append(url)
-    return out
-
-
-def _iwara_format_rank(name: str) -> int:
-    """档位排序键（越大越好）：Source 最高，然后按分辨率数字降序"""
-    low = (name or "").lower()
-    if low == "source":
-        return 10 ** 6
-    m = re.search(r'(\d{3,4})', low)
-    return int(m.group(1)) if m else 0
-
-
-def _iwara_quality_label(name: str, width: int, height: int) -> str:
-    """档位名 -> 画质标签。`Source` 用作品的原始分辨率标注"""
-    low = (name or "").lower()
-    if low == "source":
-        if width and height:
-            return f"{width}×{height} 原始"
-        return "原始画质"
-    m = re.search(r'(\d{3,4})', low)
-    if m:
-        return f"{m.group(1)}p"
-    return name or "视频"
-
-
-def _iwara_probe_sizes(urls: List[str]) -> dict:
-    """并发探针取每档精确字节数
-
-    档位接口不返回文件大小，只能自己问：发 `Range: bytes=0-0` 从
-    Content-Range 里读总长度（实测 CDN 对 HEAD 回 405，不能用 HEAD）。
-    """
-    sizes: dict = {}
-    if not urls:
-        return sizes
-    lock = threading.Lock()
-
-    def probe(u: str) -> None:
-        headers = {"User-Agent": PC_UA, "Referer": IWARA_HOST + "/",
-                   "Range": "bytes=0-0"}
-        n = 0
-        try:
-            r = requests.get(u, headers=headers, timeout=12, allow_redirects=True)
-            m = re.search(r'/(\d+)\s*$', r.headers.get("Content-Range") or "")
-            n = int(m.group(1)) if m else 0
-            if n <= 0 and r.status_code == 200:
-                n = int(r.headers.get("content-length") or 0)
-        except Exception:  # noqa: BLE001 - 拿不到就不显示大小
-            n = 0
-        if n > 0:
-            with lock:
-                sizes[u] = n
-
-    jobs = [threading.Thread(target=probe, args=(u,), daemon=True)
-            for u in dict.fromkeys(urls)]
-    for job in jobs:
-        job.start()
-    for job in jobs:
-        job.join(timeout=14)
-    return sizes
-
-
-def parse_iwara(url: str) -> VideoInfo:
-    """解析 Iwara 作品（纯 HTTP，免登录）
-
-    链路（2026-09 实测）：
-      1) `GET api.iwara.tv/video/<id>` → 标题 / 作者 / 原始文件信息 + fileUrl
-      2) 带 X-Version 签名请求 fileUrl → 档位表（Source / 540 / 360 / preview）
-      3) 并发探针取每档精确字节数
-
-    `preview` 是站点预览片段，直接丢掉；`Source` 就是上传的原始文件。
-    """
-    vid = iwara_video_id(url)
-    if not vid:
-        raise ParseError("无法从链接中识别 Iwara 作品 ID（应形如 iwara.tv/video/xxxx）")
-
-    detail = _iwara_detail(vid)
-    if detail.get("embedUrl"):
-        raise ParseError("该 Iwara 作品是外链投稿（正文里给了网盘/外部链接），无法直接下载")
-
-    file_obj = detail.get("file") or {}
-    formats = _iwara_formats(detail)
-    if not formats:
-        # fileUrl 的签名可能过期：重取一次详情再试
-        detail = _iwara_detail(vid)
-        file_obj = detail.get("file") or {}
-        formats = _iwara_formats(detail)
-
-    info = VideoInfo()
-    info.source = "iwara"
-    info.aweme_id = vid
-    info.title = (detail.get("title") or "").strip() or vid
-    user = detail.get("user") or {}
-    info.author = (user.get("name") or user.get("username") or "").strip()
-    info.author_uid = str(user.get("id") or "")
-    info.digg_count = int(detail.get("numLikes") or 0)
-    info.comment_count = int(detail.get("numComments") or 0)
-    info.share_count = int(detail.get("numViews") or 0)
-    info.create_time = _iwara_epoch(detail.get("createdAt"))
-    if isinstance(file_obj.get("duration"), (int, float)):
-        info.duration = int(file_obj["duration"]) * 1000
-
-    fid = str(file_obj.get("id") or "")
-    thumb = detail.get("thumbnail")
-    if fid and isinstance(thumb, int):
-        info.cover_url = (f"https://files.iwara.tv/image/original/{fid}"
-                          f"/thumbnail-{thumb:02d}.jpg")
-
-    if not formats:
-        raise ParseError(
-            "Iwara 没返回可下载档位。可能作品刚上传还在转码，或需要登录才能查看")
-
-    # 按画质从高到低排队：Source 在最前，然后 540 / 360
-    names = [n for n in formats if n.lower() not in IWARA_SKIP_FORMATS]
-    names.sort(key=_iwara_format_rank, reverse=True)
-    if not names:
-        raise ParseError("Iwara 只返回了预览片段，没有可下载的完整视频")
-
-    width = int(file_obj.get("width") or 0)
-    height = int(file_obj.get("height") or 0)
-    options: List[Tuple[str, str]] = []
-    backups: dict = {}
-    for name in names:
-        urls = [u for u in formats.get(name, []) if u]
-        if not urls:
-            continue
-        label = _iwara_quality_label(name, width, height)
-        options.append((label, urls[0]))
-        if len(urls) > 1:
-            backups[urls[0]] = urls[1:]
-
-    if not options:
-        raise ParseError("Iwara 未解析到可用的下载地址")
-
-    info.quality_options = options
-    info.url_backups = backups
-    info.play_url = options[0][1]
-    info.quality = options[0][0]
-    info.play_url_candidates = [u for _lab, u in options]
-    # 精确字节数（拿不到就不显示，不影响下载）。
-    # 只探主地址：同一档位的主/备地址是同一个文件，多探一轮纯属浪费
-    sizes = _iwara_probe_sizes([u for _lab, u in options])
-    if sizes:
-        # 同一档位的主/备地址是同一个文件：备用地址缺大小时用主地址补齐。
-        # 必须先补完再 update —— update 是值拷贝，之后再改 sizes 就写不进去了。
-        for main_url, extras in backups.items():
-            n = sizes.get(main_url) or 0
-            if n > 0:
-                for u in extras:
-                    sizes.setdefault(u, n)
-        info.quality_sizes.update(sizes)
-    return info
 
 
 # --------------------------------------------------------------------- #
