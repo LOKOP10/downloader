@@ -7,7 +7,7 @@ import 'media_info.dart';
 
 /// B 站解析：**纯 HTTP**，view 接口拿标题/分P，playurl 接口拿播放地址。
 ///
-/// 关键点（与旧 Kotlin 版 BiliParser、桌面端 parse_bilibili 的结论一致）：
+/// 关键点（与桌面端 parse_bilibili 的结论一致）：
 ///   1. 短链 b23.tv 要先跟随跳转，才能从落地页抠出 BV 号；
 ///   2. 链接里的 ?p=N 是分P 序号，忽略它会把第 3 P 静默下成第 1 P；
 ///   3. 两条取址路线一起问、一起列：

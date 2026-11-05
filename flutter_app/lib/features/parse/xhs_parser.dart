@@ -8,7 +8,7 @@ import 'media_info.dart';
 /// 小红书解析：纯 HTTP，读笔记详情页里的服务端渲染数据
 /// （window.__INITIAL_STATE__），不需要 WebView。
 ///
-/// 关键点（与旧 Kotlin 版 XiaohongshuParser 的实测结论一致）：
+/// 关键点（与桌面端 parse_xiaohongshu 的实测结论一致）：
 ///   1. 分享短链（xhslink.com / xhslink.cn）必须跟随跳转拿最终地址；
 ///   2. 最终地址里的 xsec_token 要原样保留，去掉后详情页只回空壳；
 ///   3. SSR 的 JSON 里有裸 undefined / NaN，整体 decode 会失败，
@@ -27,7 +27,7 @@ class XhsParser {
   static final _invalidRe =
       RegExp(r'(?<=[:,\[])\s*(?:undefined|NaN)(?=\s*[,}\]])');
 
-  /// 详情页请求超时（照 Kotlin 端 1.0.51 的教训：默认 60s 会让人以为卡死）。
+  /// 详情页请求超时（默认 60s 会让人以为卡死）。
   static const _pageTimeout = Duration(seconds: 12);
 
   Future<MediaInfo> parse(String rawUrl) async {

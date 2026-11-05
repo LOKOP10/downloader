@@ -4,7 +4,7 @@ import 'package:vdl/design/colors.dart';
 import 'package:vdl/features/settings/data/account_store.dart';
 import 'package:vdl/shared/site.dart';
 
-/// 登录对话框：粘贴 Cookie 即完成登录（与旧 Kotlin 端的做法一致）。
+/// 登录对话框：粘贴 Cookie 即完成登录。
 ///
 /// 不做站内账号密码登录 —— 那要维护各站点的登录协议，容易失效；
 /// 从浏览器复制 Cookie 一次可用很久，也便于随时清除。

@@ -6,7 +6,7 @@ import '../site.dart';
 
 /// 统一网络出口：按站点补 User-Agent / Referer / Cookie。
 ///
-/// UA 取值与 Kotlin 端 Http.kt 一致 —— 抖音那条链路对 UA 敏感，
+/// UA 取值固定 —— 抖音那条链路对 UA 敏感，
 /// 换 UA 会被判成不同的设备通道。
 class AppHttp {
   static const uaDesktop =
