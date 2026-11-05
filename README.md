@@ -3,7 +3,7 @@
 个人自用的多站点视频 / 图片下载工具。同一套能力用两套实现：
 
 - **Windows 桌面端** —— Python + PySide6，代码在 `douyin-downloader/`
-- **Android 端** —— Flutter 重写版，代码在 `flutter_app/`
+- **Android 端** —— Flutter，代码在 `flutter_app/`
 
 仅供个人学习与备份使用。
 
@@ -95,7 +95,7 @@ flutter build apk --release     # 产物：build/app/outputs/flutter-apk/app-rel
 flutter test                    # 163 项离线单测 / 组件测试
 ```
 
-包名 `com.xd.vdl.flutter`（已移除的旧 Kotlin 版是 `com.xd.vdl`，两者可共存安装）。
+包名 `com.xd.vdl.flutter`。
 实现细节、站点能力与踩坑记录见 **`flutter_app/README.md`**。
 
 ## 支持的站点
@@ -157,7 +157,7 @@ flutter test                    # 163 项离线单测 / 组件测试
 │   ├── requirements.txt
 │   └── config.json             # 运行时配置（首次运行自动生成）
 │
-└── flutter_app/                # Android 端（Flutter 重写版）
+└── flutter_app/                # Android 端（Flutter）
     ├── lib/
     │   ├── features/parse/     # 各站点解析器（抖音/小红书/B站/X/Pornhub/hanime1）
     │   ├── features/download/  # 多连接下载、HLS 分片、DASH 合并、任务队列、后台保活
@@ -269,8 +269,7 @@ python -m unittest discover -s tests -p "test_manga*.py" -v
 
 ## Android 端（Flutter）
 
-原来的 Kotlin + Jetpack Compose 版本已从仓库移除，安卓端统一用 Flutter 重写。以下只列关键结论，
-完整实现与踩坑见 `flutter_app/README.md`。
+以下只列关键结论，完整实现与踩坑见 `flutter_app/README.md`。
 
 - **站点**：抖音、小红书、B 站、X、Pornhub、hanime1、禁漫（YouTube / Instagram / Iwara 未接入）。
 - **解析全走纯 HTTP**：抖音不依赖 WebView；hanime1 / Pornhub 的 HLS CDN 走裸 TLS + Chrome 头序。
