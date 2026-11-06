@@ -25,6 +25,7 @@ class MainActivity : FlutterActivity() {
         registerMedia(flutterEngine)
         registerKeepAlive(flutterEngine)
         registerNet(flutterEngine)
+        registerWebpEncoder(flutterEngine)
     }
 
     /** 系统代理：Dart 的 HttpClient / SecureSocket 不读 WiFi 代理，得由原生读给它。 */
@@ -82,6 +83,71 @@ class MainActivity : FlutterActivity() {
                     }
                     "cancel" -> {
                         MuxerBridge.cancel()
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    /**
+     * WebP 转 MP4：Dart 逐帧解码后把 RGBA 推过来，这里用 MediaCodec 编码 H.264。
+     * 编码是有状态的长时间操作，会话保存在 WebpEncoderBridge 单例里，
+     * 所有调用都切到后台线程，避免卡 UI。
+     */
+    private fun registerWebpEncoder(flutterEngine: FlutterEngine) {
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_WEBP)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> {
+                        val w = call.argument<Int>("width") ?: 0
+                        val h = call.argument<Int>("height") ?: 0
+                        val fps = call.argument<Int>("fps") ?: 20
+                        val out = call.argument<String>("outPath").orEmpty()
+                        if (w <= 0 || h <= 0 || out.isEmpty()) {
+                            result.error("bad_args", "缺少画布尺寸或输出路径", null)
+                        } else {
+                            Thread {
+                                try {
+                                    WebpEncoderBridge.start(w, h, fps, out)
+                                    mainHandler.post { result.success(true) }
+                                } catch (error: Exception) {
+                                    val message = error.message ?: error.javaClass.simpleName
+                                    mainHandler.post { result.error("start_failed", message, null) }
+                                }
+                            }.start()
+                        }
+                    }
+                    "pushFrame" -> {
+                        val bytes = call.argument<ByteArray>("rgba")
+                        val durationMs = call.argument<Int>("durationMs") ?: 0
+                        if (bytes == null) {
+                            result.error("bad_args", "缺少帧数据", null)
+                        } else {
+                            Thread {
+                                try {
+                                    WebpEncoderBridge.pushFrame(bytes, durationMs)
+                                    mainHandler.post { result.success(true) }
+                                } catch (error: Exception) {
+                                    val message = error.message ?: error.javaClass.simpleName
+                                    mainHandler.post { result.error("push_failed", message, null) }
+                                }
+                            }.start()
+                        }
+                    }
+                    "finish" -> {
+                        Thread {
+                            try {
+                                val ok = WebpEncoderBridge.finish()
+                                mainHandler.post { result.success(ok) }
+                            } catch (error: Exception) {
+                                val message = error.message ?: error.javaClass.simpleName
+                                mainHandler.post { result.error("finish_failed", message, null) }
+                            }
+                        }.start()
+                    }
+                    "cancel" -> {
+                        WebpEncoderBridge.cancel()
                         result.success(null)
                     }
                     else -> result.notImplemented()
@@ -167,5 +233,6 @@ class MainActivity : FlutterActivity() {
         private const val CHANNEL_MEDIA = "vdl/media"
         private const val CHANNEL_KEEPALIVE = "vdl/keepalive"
         private const val CHANNEL_NET = "vdl/net"
+        private const val CHANNEL_WEBP = "vdl/webp2mp4"
     }
 }
