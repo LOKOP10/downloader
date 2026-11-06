@@ -99,9 +99,15 @@ object WebpEncoderBridge {
     fun finish(): Boolean {
         val codec = encoder ?: return false
         try {
-            val index = codec.dequeueInputBuffer(DEQUEUE_TIMEOUT_US * 50)
-            if (index >= 0) {
-                codec.queueInputBuffer(index, 0, 0, ptsUs(frameIndex), MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            // EOS 必须抢到输入缓冲才发得出去：抢不到就先 drain 现有输出再重试，
+            // 但不能无限等（单次 dequeue 10ms，之前 50 次就白等半秒）。
+            for (attempt in 0 until 20) {
+                val index = codec.dequeueInputBuffer(DEQUEUE_TIMEOUT_US * 10)
+                if (index >= 0) {
+                    codec.queueInputBuffer(index, 0, 0, ptsUs(frameIndex), MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    break
+                }
+                drain(codec, false)
             }
             drain(codec, true)
             val ok = muxerStarted
@@ -132,7 +138,10 @@ object WebpEncoderBridge {
         val image: Image? = codec.getInputImage(index)
         if (image != null) {
             fillImage(image, rgba)
-            codec.queueInputBuffer(index, 0, imageBufferSize(image), ptsUs(frameIndex), 0)
+            // 输入缓冲是 YUV420，容量恒为 w*h*3/2。不能用各 plane 的 limit() 相加：
+            // 真机实测那样算出来是 1487998（y/u/v 视图 limit 重叠计算），超过 codec
+            // 实际容量 1116000，直接报「buffer offset and size goes beyond the capacity」。
+            codec.queueInputBuffer(index, 0, width * height * 3 / 2, ptsUs(frameIndex), 0)
         } else {
             val buffer = codec.getInputBuffer(index) ?: throw IOException("编码器输入缓冲不可用")
             buffer.clear()
@@ -256,23 +265,19 @@ object WebpEncoderBridge {
         return out
     }
 
-    private fun imageBufferSize(image: Image): Int {
-        var total = 0
-        for (plane in image.planes) {
-            total += plane.buffer.limit()
-        }
-        return total
-    }
-
     private fun drain(codec: MediaCodec, endOfStream: Boolean) {
-        var guard = 0
-        while (guard < 10000) {
-            guard += 1
+        // 非 EOS：拿不到输出就立刻返回（编码器会异步出帧）。
+        // EOS：最多空转 100 次（约 1 秒）收尾，绝不无限等 —— 之前写成 10000 次，
+        // 真机上结束阶段会白卡 100 秒。
+        var idle = 0
+        val maxIdle = if (endOfStream) 100 else 1
+        while (idle < maxIdle) {
             val index = codec.dequeueOutputBuffer(bufferInfo, DEQUEUE_TIMEOUT_US)
             if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                if (!endOfStream) return
+                idle += 1
                 continue
             }
+            idle = 0
             if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 val mux = muxer ?: throw IOException("封装器已释放")
                 if (!muxerStarted) {
