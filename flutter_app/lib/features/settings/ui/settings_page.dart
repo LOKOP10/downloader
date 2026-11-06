@@ -12,6 +12,7 @@ import 'package:vdl/features/settings/ui/widgets/login_dialog.dart';
 import 'package:vdl/features/download/data/download_location.dart';
 import 'package:vdl/features/download/data/download_settings.dart';
 import 'package:vdl/features/manga/data/jm_preview_cache.dart';
+import 'package:vdl/features/tools/webp2mp4_page.dart';
 import 'package:vdl/features/manga/data/manga_location.dart';
 import 'package:vdl/features/download/task_store.dart';
 import 'package:vdl/features/settings/ui/log_page.dart';
@@ -172,6 +173,20 @@ class _SettingsPageState extends State<SettingsPage> {
               trailingText: '清理',
               showDivider: false,
               onTap: _clearPreviewCache,
+            ),
+          ]),
+          const SizedBox(height: AppSize.cardGap + 4),
+          const AppSectionLabel('工具'),
+          AppCardGroup(children: [
+            AppListTile(
+              icon: Icons.movie_filter_outlined,
+              title: 'WebP 转 MP4',
+              subtitle: '把动图 WebP 或几张 WebP 拼成一段 mp4 视频',
+              trailingText: '打开',
+              showDivider: false,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const Webp2Mp4Page()),
+              ),
             ),
           ]),
           const SizedBox(height: AppSize.cardGap + 4),
