@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -67,6 +69,94 @@ class WebpSourceInfo {
   bool get isAnimated => frameCount > 1;
 
   String get fileName => fileNameOf(path);
+}
+
+/// 解码出来的一帧：像素 + 该帧时长。
+class _DecodedFrame {
+  _DecodedFrame(this.image, this.durationMs);
+
+  final ui.Image image;
+  final int durationMs;
+}
+
+/// 带背压的帧泵：后台按顺序解码，主流程按需取帧。
+///
+/// 这样「解码下一帧」与「合成 + 跨通道编码当前帧」能重叠起来 —— 原来是一帧一帧
+/// 串行：解一帧 → 合成 → 传一帧 → 再解下一帧，解码线程大部分时间在空转。
+/// 同一个 codec 的 getNextFrame 仍然是严格顺序调用（并发调同一个 codec 会乱序）。
+class _FramePump {
+  _FramePump(this._source) {
+    _subscription = _decode().listen(
+      _onFrame,
+      onError: _onError,
+      onDone: _onDone,
+      cancelOnError: true,
+    );
+  }
+
+  /// 缓冲上限。每帧约 3MB（744×1000 RGBA），4 帧约 12MB，够重叠又不炸内存。
+  static const int _maxBuffered = 4;
+
+  final WebpSourceInfo _source;
+  late final StreamSubscription<_DecodedFrame> _subscription;
+  final Queue<_DecodedFrame> _queue = Queue<_DecodedFrame>();
+  Object? _error;
+  StackTrace? _stackTrace;
+  bool _done = false;
+
+  Stream<_DecodedFrame> _decode() async* {
+    final bytes = await File(_source.path).readAsBytes();
+    final codec = await ui.instantiateImageCodec(bytes);
+    try {
+      for (var i = 0; i < codec.frameCount; i++) {
+        final frame = await codec.getNextFrame();
+        yield _DecodedFrame(frame.image, frame.duration.inMilliseconds);
+      }
+    } finally {
+      codec.dispose();
+    }
+  }
+
+  void _onFrame(_DecodedFrame frame) {
+    _queue.add(frame);
+    if (_queue.length >= _maxBuffered && !_subscription.isPaused) {
+      _subscription.pause();
+    }
+  }
+
+  void _onError(Object error, StackTrace stackTrace) {
+    _error = error;
+    _stackTrace = stackTrace;
+  }
+
+  void _onDone() {
+    _done = true;
+  }
+
+  /// 取下一帧；没有更多帧时返回 null。
+  Future<_DecodedFrame?> take() async {
+    while (_queue.isEmpty && !_done && _error == null) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    if (_error != null) {
+      Error.throwWithStackTrace(_error!, _stackTrace ?? StackTrace.current);
+    }
+    if (_queue.isEmpty) return null;
+    final frame = _queue.removeFirst();
+    if (_subscription.isPaused) {
+      _subscription.resume();
+    }
+    return frame;
+  }
+
+  /// 停掉解码并释放队列里还没取走的帧。
+  Future<void> dispose() async {
+    await _subscription.cancel();
+    for (final frame in _queue) {
+      frame.image.dispose();
+    }
+    _queue.clear();
+  }
 }
 
 /// 逐帧解码 WebP 并交给原生 MediaCodec 编码成 mp4。
@@ -231,58 +321,67 @@ class WebpToMp4 {
     var composeUs = 0;
     var pushUs = 0;
     final stopwatch = Stopwatch();
+    _FramePump? pump;
+    // 预取的下一张：中途出错时要一起停掉，否则它的解码还在后台跑。
+    _FramePump? spare;
     try {
-      for (final head in sources) {
-        final bytes = await File(head.path).readAsBytes();
+      var current = _FramePump(sources.first);
+      pump = current;
+      for (var f = 0; f < sources.length; f++) {
+        final head = sources[f];
         // 尺寸已等于画布且不含透明像素时走快速路径：直接回读解码结果，省掉
         // PictureRecorder → toImage → toByteData 的整条 GPU 渲染往返。
         final direct = head.width == canvasWidth &&
             head.height == canvasHeight &&
             !head.hasAlpha;
-        final codec = await ui.instantiateImageCodec(bytes);
-        try {
-          for (var i = 0; i < codec.frameCount; i++) {
-            checkCancel();
-            stopwatch
-              ..reset()
-              ..start();
-            final info = await codec.getNextFrame();
-            stopwatch.stop();
-            decodeUs += stopwatch.elapsedMicroseconds;
-            final frameMs = info.duration.inMilliseconds > 0
-                ? info.duration.inMilliseconds
-                : (1000 ~/ fps);
-            stopwatch
-              ..reset()
-              ..start();
-            final rgba = direct
-                ? await _imageToRgba(info.image)
-                : await _composeFrame(info.image, canvasWidth, canvasHeight);
-            info.image.dispose();
-            stopwatch.stop();
-            composeUs += stopwatch.elapsedMicroseconds;
-            stopwatch
-              ..reset()
-              ..start();
-            await _channel.invokeMethod<bool>('pushFrame', <String, dynamic>{
-              'rgba': rgba,
-              'durationMs': frameMs,
-            });
-            stopwatch.stop();
-            pushUs += stopwatch.elapsedMicroseconds;
-            writtenFrames += 1;
-            emittedMs += frameMs;
-            done += 1;
-            report(
-              done,
-              totalFrames,
-              '正在编码第 $done / $totalFrames 帧'
-              '${_timingHint(decodeUs, composeUs, pushUs, done)}',
-            );
-          }
-        } finally {
-          codec.dispose();
+        // 下一个文件立刻开始解码，与当前文件的合成/编码重叠，也就是多张并行。
+        final upcoming =
+            f + 1 < sources.length ? _FramePump(sources[f + 1]) : null;
+        spare = upcoming;
+        while (true) {
+          checkCancel();
+          stopwatch
+            ..reset()
+            ..start();
+          final frame = await current.take();
+          stopwatch.stop();
+          decodeUs += stopwatch.elapsedMicroseconds;
+          if (frame == null) break;
+          final frameMs =
+              frame.durationMs > 0 ? frame.durationMs : (1000 ~/ fps);
+          stopwatch
+            ..reset()
+            ..start();
+          final rgba = direct
+              ? await _imageToRgba(frame.image)
+              : await _composeFrame(frame.image, canvasWidth, canvasHeight);
+          frame.image.dispose();
+          stopwatch.stop();
+          composeUs += stopwatch.elapsedMicroseconds;
+          stopwatch
+            ..reset()
+            ..start();
+          await _channel.invokeMethod<bool>('pushFrame', <String, dynamic>{
+            'rgba': rgba,
+            'durationMs': frameMs,
+          });
+          stopwatch.stop();
+          pushUs += stopwatch.elapsedMicroseconds;
+          writtenFrames += 1;
+          emittedMs += frameMs;
+          done += 1;
+          report(
+            done,
+            totalFrames,
+            '正在编码第 $done / $totalFrames 帧'
+            '${_timingHint(decodeUs, composeUs, pushUs, done)}',
+          );
         }
+        await current.dispose();
+        pump = null;
+        if (upcoming == null) break;
+        current = upcoming;
+        pump = current;
       }
       report(totalFrames, totalFrames, '正在收尾…');
       final ok = await _channel.invokeMethod<bool>('finish') ?? false;
@@ -290,6 +389,8 @@ class WebpToMp4 {
         throw WebpConversionException('编码器没有产出视频轨，请重试');
       }
     } catch (error) {
+      await pump?.dispose();
+      await spare?.dispose();
       await _channel.invokeMethod<void>('cancel').catchError((_) {});
       await _deleteQuietly(outFile);
       if (error is WebpConversionException) rethrow;
