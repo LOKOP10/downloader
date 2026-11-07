@@ -82,7 +82,7 @@ void main() {
     );
   });
 
-  test('convert 调 start → 逐帧 pushFrame → finish，并按时长换算重复帧', () async {
+  test('convert 调 start → 逐帧 pushFrame → finish，帧数与原动画一致', () async {
     final out = File('${Directory.systemTemp.path}/_tmp_webp2mp4_out.mp4');
     if (out.existsSync()) out.deleteSync();
     final progress = <int>[];
@@ -95,8 +95,8 @@ void main() {
       );
       expect(result.width, 160);
       expect(result.height, 120);
-      // 3 帧 x 100ms，20fps 下每帧 2 次重复
-      expect(result.frames, 6);
+      // 3 帧就写 3 帧（可变帧率，不再折成重复帧）
+      expect(result.frames, 3);
       expect(result.durationMs, 300);
 
       final methods = calls.map((call) => call.method).toList();
@@ -129,7 +129,7 @@ void main() {
         sources: <String>[fixture.path, fixture.path],
         outputPath: out.path,
       );
-      expect(result.frames, 12);
+      expect(result.frames, 6);
       expect(calls.where((call) => call.method == 'pushFrame').length, 6);
       expect(result.width.isEven, true);
       expect(result.height.isEven, true);

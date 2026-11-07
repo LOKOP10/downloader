@@ -23,6 +23,8 @@ object WebpEncoderBridge {
     private const val MIME = MediaFormat.MIMETYPE_VIDEO_AVC
     private const val DEQUEUE_TIMEOUT_US = 10_000L
     private const val BITRATE_PER_PIXEL = 6
+    /** 帧时长缺失时的兜底步长（30fps）。 */
+    private const val DEFAULT_STEP_MS = 33
 
     private var encoder: MediaCodec? = null
     private var muxer: MediaMuxer? = null
@@ -32,6 +34,7 @@ object WebpEncoderBridge {
     private var height = 0
     private var fps = 20
     private var frameIndex = 0L
+    private var ptsUs = 0L
     private val bufferInfo = MediaCodec.BufferInfo()
 
     @Volatile
@@ -50,6 +53,7 @@ object WebpEncoderBridge {
         height = heightPx
         fps = if (fpsValue in 1..60) fpsValue else 20
         frameIndex = 0
+        ptsUs = 0L
 
         val out = File(outPath)
         out.parentFile?.mkdirs()
@@ -75,7 +79,10 @@ object WebpEncoderBridge {
 
     /**
      * 推入一帧。rgba 必须是 width*height*4 的 RGBA8888；durationMs 是该帧显示时长。
-     * 时长按当前帧率折算成重复帧数，至少 1 帧。
+     *
+     * ⚠️ 不做「按固定帧率折成重复帧」：H.264/MP4 支持可变帧率，直接用每帧真实时长
+     * 累加做 PTS 就能精确还原原动画节奏。之前按 20fps 四舍五入，31ms 的帧会被抬到
+     * 50ms —— 真机实测 193 帧 / 6.0 秒的动图转出来变成 9.65 秒（慢了 61%）。
      */
     fun pushFrame(rgba: ByteArray, durationMs: Int) {
         if (cancelRequested) throw IOException("已取消")
@@ -83,16 +90,12 @@ object WebpEncoderBridge {
         val expected = width * height * 4
         if (rgba.size < expected) throw IOException("帧数据不足")
 
-        var repeats = 1
-        if (durationMs > 0) {
-            repeats = Math.round(durationMs * fps / 1000.0).toInt()
-            if (repeats < 1) repeats = 1
-        }
-        for (i in 0 until repeats) {
-            if (cancelRequested) throw IOException("已取消")
-            encodeOne(codec, rgba)
-            drain(codec, false)
-        }
+        encodeOne(codec, rgba, ptsUs)
+        drain(codec, false)
+        // 用本帧时长推进时间轴；时长为 0 时按 30fps 兜底，避免整段时间轴停住。
+        val stepMs = if (durationMs > 0) durationMs else DEFAULT_STEP_MS
+        ptsUs += stepMs * 1000L
+        frameIndex += 1
     }
 
     /** 发 EOS 并把剩余码流写完。返回是否真的产出了轨道数据。 */
@@ -104,7 +107,7 @@ object WebpEncoderBridge {
             for (attempt in 0 until 20) {
                 val index = codec.dequeueInputBuffer(DEQUEUE_TIMEOUT_US * 10)
                 if (index >= 0) {
-                    codec.queueInputBuffer(index, 0, 0, ptsUs(frameIndex), MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    codec.queueInputBuffer(index, 0, 0, ptsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                     break
                 }
                 drain(codec, false)
@@ -125,7 +128,7 @@ object WebpEncoderBridge {
         }
     }
 
-    private fun encodeOne(codec: MediaCodec, rgba: ByteArray) {
+    private fun encodeOne(codec: MediaCodec, rgba: ByteArray, pts: Long) {
         var index = codec.dequeueInputBuffer(DEQUEUE_TIMEOUT_US * 100)
         var spins = 0
         while (index < 0 && spins < 2000) {
@@ -141,14 +144,13 @@ object WebpEncoderBridge {
             // 输入缓冲是 YUV420，容量恒为 w*h*3/2。不能用各 plane 的 limit() 相加：
             // 真机实测那样算出来是 1487998（y/u/v 视图 limit 重叠计算），超过 codec
             // 实际容量 1116000，直接报「buffer offset and size goes beyond the capacity」。
-            codec.queueInputBuffer(index, 0, width * height * 3 / 2, ptsUs(frameIndex), 0)
+            codec.queueInputBuffer(index, 0, width * height * 3 / 2, pts, 0)
         } else {
             val buffer = codec.getInputBuffer(index) ?: throw IOException("编码器输入缓冲不可用")
             buffer.clear()
             buffer.put(toPlanarYuv420(rgba))
-            codec.queueInputBuffer(index, 0, buffer.position(), ptsUs(frameIndex), 0)
+            codec.queueInputBuffer(index, 0, buffer.position(), pts, 0)
         }
-        frameIndex += 1
     }
 
     /** 按 Image 的平面写入，兼容 pixelStride 为 1（planar）与 2（semi-planar）的实现。 */
@@ -323,10 +325,6 @@ object WebpEncoderBridge {
         } finally {
             runCatching { probe.release() }
         }
-    }
-
-    private fun ptsUs(index: Long): Long {
-        return index * 1_000_000L / fps
     }
 
     private fun clamp(value: Int): Byte {

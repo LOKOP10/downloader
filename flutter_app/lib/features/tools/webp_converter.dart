@@ -19,7 +19,7 @@ class WebpConversionException implements Exception {
   String toString() => message;
 }
 
-/// 转换结果。frames 是实际写入视频的帧数（已按帧率折算重复帧）。
+/// 转换结果。frames 是写入视频的帧数（与原动画帧数一一对应，不再做重复帧）。
 class WebpConversionResult {
   const WebpConversionResult({
     required this.path,
@@ -207,7 +207,7 @@ class WebpToMp4 {
               'rgba': rgba,
               'durationMs': frameMs,
             });
-            writtenFrames += _repeatCount(frameMs, fps);
+            writtenFrames += 1;
             emittedMs += frameMs;
             done += 1;
             report(done, totalFrames, '正在编码第 $done / $totalFrames 帧…');
@@ -244,12 +244,6 @@ class WebpToMp4 {
     } catch (_) {
       // 原生还没启动时忽略。
     }
-  }
-
-  static int _repeatCount(int frameMs, int fps) {
-    if (frameMs <= 0) return 1;
-    final value = (frameMs * fps / 1000).round();
-    return value < 1 ? 1 : value;
   }
 
   /// 把单帧画到统一画布中央（白底），返回 RGBA 字节。
