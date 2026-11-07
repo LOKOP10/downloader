@@ -39,18 +39,25 @@ class WebpConversionResult {
 /// 单个 WebP 输入的头部信息。
 class WebpSourceInfo {
   const WebpSourceInfo({
+    required this.uid,
     required this.path,
     required this.width,
     required this.height,
     required this.frameCount,
     required this.durationMs,
+    this.thumbnail,
   });
 
+  /// 同一次会话内唯一：同一个文件可以被重复选择，列表 key 不能只用 path。
+  final String uid;
   final String path;
   final int width;
   final int height;
   final int frameCount;
   final int durationMs;
+
+  /// 首帧缩略图（PNG 字节），取不到时为 null，界面退回图标占位。
+  final Uint8List? thumbnail;
 
   bool get isAnimated => frameCount > 1;
 
@@ -71,6 +78,11 @@ class WebpToMp4 {
   static const int maxFrames = 20000;
   static const int _maxInputBytes = 256 * 1024 * 1024;
 
+  /// 缩略图最长边（px）。列表里按 44dp 显示，160 足够清晰又不占内存。
+  static const int _thumbMaxEdge = 160;
+
+  static int _uidSeq = 0;
+
   /// 只读头部：尺寸、帧数、总时长。选中文件后用来估算进度与画布。
   static Future<WebpSourceInfo> probe(String path) async {
     final file = File(path);
@@ -89,6 +101,12 @@ class WebpToMp4 {
       final width = first.image.width;
       final height = first.image.height;
       durationMs += first.duration.inMilliseconds;
+      Uint8List? thumbnail;
+      try {
+        thumbnail = await _makeThumbnail(first.image, width, height);
+      } catch (_) {
+        // 缩略图失败不影响转换，退回图标占位。
+      }
       first.image.dispose();
       if (width <= 0 || height <= 0) {
         throw WebpConversionException('图片尺寸无效：${_name(path)}');
@@ -102,11 +120,13 @@ class WebpToMp4 {
         info.image.dispose();
       }
       return WebpSourceInfo(
+        uid: (_uidSeq++).toString(),
         path: path,
         width: width,
         height: height,
         frameCount: codec.frameCount,
         durationMs: durationMs,
+        thumbnail: thumbnail,
       );
     } on WebpConversionException {
       rethrow;
@@ -243,6 +263,33 @@ class WebpToMp4 {
       await _channel.invokeMethod<void>('cancel');
     } catch (_) {
       // 原生还没启动时忽略。
+    }
+  }
+
+  /// 首帧缩放到最长边 _thumbMaxEdge 的 PNG，用于列表预览。
+  static Future<Uint8List?> _makeThumbnail(ui.Image image, int width, int height) async {
+    final longest = width > height ? width : height;
+    final scale = longest > _thumbMaxEdge ? _thumbMaxEdge / longest : 1.0;
+    final targetW = (width * scale).round().clamp(1, _thumbMaxEdge);
+    final targetH = (height * scale).round().clamp(1, _thumbMaxEdge);
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(recorder);
+    canvas.drawImageRect(
+      image,
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+      ui.Rect.fromLTWH(0, 0, targetW.toDouble(), targetH.toDouble()),
+      ui.Paint()..filterQuality = ui.FilterQuality.low,
+    );
+    final picture = recorder.endRecording();
+    ui.Image? scaled;
+    try {
+      scaled = await picture.toImage(targetW, targetH);
+      final data = await scaled.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) return null;
+      return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    } finally {
+      scaled?.dispose();
+      picture.dispose();
     }
   }
 

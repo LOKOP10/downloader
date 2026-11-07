@@ -55,16 +55,23 @@ class _Webp2Mp4PageState extends State<Webp2Mp4Page> {
               trailingText: _busy ? '转换中' : '选择',
               onTap: _busy ? null : _pickFiles,
             ),
-            for (final source in _sources)
-              AppListTile(
-                icon: source.isAnimated ? Icons.gif_box_outlined : Icons.image_outlined,
-                title: source.fileName,
-                subtitle: '${source.width}×${source.height} · ${source.frameCount} 帧 · '
-                    '${(source.durationMs / 1000).toStringAsFixed(1)} 秒',
-                trailingText: _busy ? null : '移除',
-                onTap: _busy ? null : () => _remove(source),
-              ),
           ]),
+          if (_sources.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 6),
+              child: Text(
+                '长按可拖动排序 · 第 1 个在最前，最后一个在最后',
+                style: TextStyle(color: palette.hint, fontSize: 12),
+              ),
+            ),
+            _SourceList(
+              sources: _sources,
+              busy: _busy,
+              onReorder: _onReorder,
+              onRemove: _remove,
+            ),
+          ],
           if (_sources.isNotEmpty) ...[
             const AppSectionLabel('输出'),
             AppCardGroup(children: [
@@ -184,6 +191,17 @@ class _Webp2Mp4PageState extends State<Webp2Mp4Page> {
     final suffix = _sources.length > 1 ? '_共${_sources.length}张' : '';
     if (!mounted) return;
     setState(() => _pendingOutput = '$dir/$stem$suffix.mp4');
+  }
+
+  /// 拖动排序：列表顺序就是拼接顺序（第一个在最前）。
+  void _onReorder(int oldIndex, int newIndex) {
+    setState(() {
+      final target = newIndex > oldIndex ? newIndex - 1 : newIndex;
+      final moved = _sources.removeAt(oldIndex);
+      _sources.insert(target, moved);
+    });
+    // 第一张变了，默认输出文件名跟着变。
+    _refreshOutputPath();
   }
 
   void _remove(WebpSourceInfo source) {
@@ -312,6 +330,161 @@ class _MessageCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 输入列表：每项带首帧缩略图，长按拖动调整顺序（顺序即拼接顺序）。
+class _SourceList extends StatelessWidget {
+  const _SourceList({
+    required this.sources,
+    required this.busy,
+    required this.onReorder,
+    required this.onRemove,
+  });
+
+  final List<WebpSourceInfo> sources;
+  final bool busy;
+  final void Function(int oldIndex, int newIndex) onReorder;
+  final void Function(WebpSourceInfo source) onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(AppSize.cardRadius),
+      ),
+      child: ReorderableListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        buildDefaultDragHandles: false,
+        itemCount: sources.length,
+        onReorder: onReorder,
+        proxyDecorator: (child, index, animation) => Material(
+          color: palette.surface,
+          elevation: 8,
+          borderRadius: BorderRadius.circular(AppSize.cardRadius),
+          child: child,
+        ),
+        itemBuilder: (context, index) {
+          final source = sources[index];
+          return ReorderableDelayedDragStartListener(
+            key: ValueKey<String>(source.uid),
+            index: index,
+            child: _SourceTile(
+              source: source,
+              index: index,
+              isLast: index == sources.length - 1,
+              busy: busy,
+              onRemove: () => onRemove(source),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _SourceTile extends StatelessWidget {
+  const _SourceTile({
+    required this.source,
+    required this.index,
+    required this.isLast,
+    required this.busy,
+    required this.onRemove,
+  });
+
+  final WebpSourceInfo source;
+  final int index;
+  final bool isLast;
+  final bool busy;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+          child: Row(
+            children: <Widget>[
+              _thumb(palette),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      '${index + 1}. ${source.fileName}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.titleText,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${source.width}×${source.height} · ${source.frameCount} 帧 · '
+                      '${(source.durationMs / 1000).toStringAsFixed(1)} 秒',
+                      style: TextStyle(color: palette.hint, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              if (!busy)
+                TextButton(
+                  onPressed: onRemove,
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(56, 36),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                  child: Text(
+                    '移除',
+                    style: TextStyle(color: palette.hint, fontSize: 13),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        if (!isLast)
+          Divider(
+            height: 1,
+            thickness: 1,
+            color: palette.rowDivider,
+            indent: 12,
+            endIndent: 12,
+          ),
+      ],
+    );
+  }
+
+  Widget _thumb(AppPalette palette) {
+    const double size = 44;
+    final thumb = source.thumbnail;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: thumb == null
+            ? Container(
+                color: palette.divider,
+                child: Icon(Icons.image_outlined, size: 20, color: palette.hint),
+              )
+            : Image.memory(
+                thumb,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                filterQuality: FilterQuality.low,
+              ),
       ),
     );
   }
