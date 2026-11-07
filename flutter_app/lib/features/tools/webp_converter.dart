@@ -45,6 +45,8 @@ class WebpSourceInfo {
     required this.height,
     required this.frameCount,
     required this.durationMs,
+    this.hasAlpha = false,
+    this.durationEstimated = false,
   });
 
   /// 同一次会话内唯一：同一个文件可以被重复选择，列表 key 不能只用 path。
@@ -54,6 +56,13 @@ class WebpSourceInfo {
   final int height;
   final int frameCount;
   final int durationMs;
+
+  /// 首帧是否含半透明像素。全不透明且尺寸等于画布时可以跳过合成直接回读，
+  /// 省掉一次 GPU 渲染往返（这是每帧的主要开销之一）。
+  final bool hasAlpha;
+
+  /// durationMs 是否为估算值（首帧时长 × 帧数）。列表里标「约」提醒。
+  final bool durationEstimated;
 
   bool get isAnimated => frameCount > 1;
 
@@ -89,11 +98,27 @@ class WebpToMp4 {
     ui.Codec? codec;
     try {
       codec = await ui.instantiateImageCodec(bytes);
-      var durationMs = 0;
       final first = await codec.getNextFrame();
       final width = first.image.width;
       final height = first.image.height;
-      durationMs += first.duration.inMilliseconds;
+      final firstMs = first.duration.inMilliseconds;
+      // 采样判断是否含透明像素：每 8 个像素查一次 alpha 通道，便宜且够用
+      // （透明通常是成片的，采样不会漏）。
+      var hasAlpha = false;
+      final firstData =
+          await first.image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (firstData != null) {
+        final firstRgba = firstData.buffer.asUint8List(
+          firstData.offsetInBytes,
+          firstData.lengthInBytes,
+        );
+        for (var i = 3; i < firstRgba.length; i += 32) {
+          if (firstRgba[i] != 255) {
+            hasAlpha = true;
+            break;
+          }
+        }
+      }
       first.image.dispose();
       if (width <= 0 || height <= 0) {
         throw WebpConversionException('图片尺寸无效：${_name(path)}');
@@ -101,18 +126,23 @@ class WebpToMp4 {
       if (width * height > maxCanvasPixels) {
         throw WebpConversionException('超过 1600 万像素限制：${_name(path)}');
       }
-      for (var i = 1; i < codec.frameCount; i++) {
-        final info = await codec.getNextFrame();
-        durationMs += info.duration.inMilliseconds;
-        info.image.dispose();
-      }
+      // 只解首帧就够：帧数由 codec.frameCount 直接给出，不必逐帧解码累加。
+      // 原来逐帧解一遍，9 个 193 帧的动图要多解 1737 帧全尺寸画面，选文件时
+      // 会一串串卡十几秒。总时长按「首帧时长 × 帧数」估算：定帧率动图完全准确，
+      // 可变帧率会有偏差（列表里标「约」）；真正编码用的是逐帧真实 PTS，不受影响。
+      final frameCount = codec.frameCount;
+      final estimatedMs = firstMs > 0
+          ? firstMs * frameCount
+          : frameCount * (1000 ~/ defaultFps);
       return WebpSourceInfo(
         uid: (_uidSeq++).toString(),
         path: path,
         width: width,
         height: height,
-        frameCount: codec.frameCount,
-        durationMs: durationMs,
+        frameCount: frameCount,
+        durationMs: estimatedMs,
+        hasAlpha: hasAlpha,
+        durationEstimated: frameCount > 1,
       );
     } on WebpConversionException {
       rethrow;
@@ -125,7 +155,7 @@ class WebpToMp4 {
 
   /// 转换入口。onProgress(done, total, message) 在调用方线程回调。
   static Future<WebpConversionResult> convert({
-    required List<String> sources,
+    required List<WebpSourceInfo> sources,
     required String outputPath,
     int fps = defaultFps,
     void Function(int done, int total, String message)? onProgress,
@@ -138,7 +168,7 @@ class WebpToMp4 {
       throw WebpConversionException('输出文件扩展名必须是 .mp4');
     }
     for (final source in sources) {
-      if (source.toLowerCase() == outputPath.toLowerCase()) {
+      if (source.path.toLowerCase() == outputPath.toLowerCase()) {
         throw WebpConversionException('输入和输出不能是同一个文件');
       }
     }
@@ -153,22 +183,22 @@ class WebpToMp4 {
       }
     }
 
-    report(0, 0, '正在读取文件信息…');
-    final headers = <WebpSourceInfo>[];
+    // 直接复用调用方已 probe 过的头部信息，不再逐个重新解码。
+    // 原来这里对每个文件又 probe 一次，而 probe 要逐帧 getNextFrame 才算得出时长：
+    // 9 个 193 帧的动图等于多解码 1737 帧全尺寸画面，转换前会长时间卡在
+    // 「正在读取文件信息…」，之后真正编码时还要从头再解一遍。
     var totalFrames = 0;
     for (final source in sources) {
       checkCancel();
-      final head = await probe(source);
-      headers.add(head);
-      totalFrames += head.frameCount;
+      totalFrames += source.frameCount;
       if (totalFrames > maxFrames) {
         throw WebpConversionException('总帧数超过 20000 帧限制');
       }
     }
 
-    var canvasWidth = headers.first.width;
-    var canvasHeight = headers.first.height;
-    for (final head in headers) {
+    var canvasWidth = sources.first.width;
+    var canvasHeight = sources.first.height;
+    for (final head in sources) {
       if (head.width > canvasWidth) canvasWidth = head.width;
       if (head.height > canvasHeight) canvasHeight = head.height;
     }
@@ -196,27 +226,59 @@ class WebpToMp4 {
     var done = 0;
     var writtenFrames = 0;
     var emittedMs = 0;
+    // 分阶段计时写进进度文案，慢的时候能一眼看出瓶颈在解码、合成还是编码。
+    var decodeUs = 0;
+    var composeUs = 0;
+    var pushUs = 0;
+    final stopwatch = Stopwatch();
     try {
-      for (final head in headers) {
+      for (final head in sources) {
         final bytes = await File(head.path).readAsBytes();
+        // 尺寸已等于画布且不含透明像素时走快速路径：直接回读解码结果，省掉
+        // PictureRecorder → toImage → toByteData 的整条 GPU 渲染往返。
+        final direct = head.width == canvasWidth &&
+            head.height == canvasHeight &&
+            !head.hasAlpha;
         final codec = await ui.instantiateImageCodec(bytes);
         try {
           for (var i = 0; i < codec.frameCount; i++) {
             checkCancel();
+            stopwatch
+              ..reset()
+              ..start();
             final info = await codec.getNextFrame();
+            stopwatch.stop();
+            decodeUs += stopwatch.elapsedMicroseconds;
             final frameMs = info.duration.inMilliseconds > 0
                 ? info.duration.inMilliseconds
                 : (1000 ~/ fps);
-            final rgba = await _composeFrame(info.image, canvasWidth, canvasHeight);
+            stopwatch
+              ..reset()
+              ..start();
+            final rgba = direct
+                ? await _imageToRgba(info.image)
+                : await _composeFrame(info.image, canvasWidth, canvasHeight);
             info.image.dispose();
+            stopwatch.stop();
+            composeUs += stopwatch.elapsedMicroseconds;
+            stopwatch
+              ..reset()
+              ..start();
             await _channel.invokeMethod<bool>('pushFrame', <String, dynamic>{
               'rgba': rgba,
               'durationMs': frameMs,
             });
+            stopwatch.stop();
+            pushUs += stopwatch.elapsedMicroseconds;
             writtenFrames += 1;
             emittedMs += frameMs;
             done += 1;
-            report(done, totalFrames, '正在编码第 $done / $totalFrames 帧…');
+            report(
+              done,
+              totalFrames,
+              '正在编码第 $done / $totalFrames 帧'
+              '${_timingHint(decodeUs, composeUs, pushUs, done)}',
+            );
           }
         } finally {
           codec.dispose();
@@ -250,6 +312,29 @@ class WebpToMp4 {
     } catch (_) {
       // 原生还没启动时忽略。
     }
+  }
+
+  /// 尺寸已等于画布且不含透明像素时的快速路径：直接回读解码结果。
+  static Future<Uint8List> _imageToRgba(ui.Image image) async {
+    final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (data == null) {
+      throw WebpConversionException('无法读取帧像素');
+    }
+    return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+  }
+
+  /// 每 10 帧刷新一次分阶段平均耗时，写进进度文案方便定位瓶颈。
+  static String _timingHint(
+    int decodeUs,
+    int composeUs,
+    int pushUs,
+    int done,
+  ) {
+    if (done == 0 || done % 10 != 0) return '';
+    final decode = (decodeUs / done / 1000).round();
+    final compose = (composeUs / done / 1000).round();
+    final push = (pushUs / done / 1000).round();
+    return '（解码 ${decode}ms · 合成 ${compose}ms · 编码 ${push}ms）';
   }
 
   /// 把单帧画到统一画布中央（白底），返回 RGBA 字节。

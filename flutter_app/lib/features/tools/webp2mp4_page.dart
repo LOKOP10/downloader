@@ -255,7 +255,7 @@ class _Webp2Mp4PageState extends State<Webp2Mp4Page> {
     });
     try {
       final result = await WebpToMp4.convert(
-        sources: _sources.map((source) => source.path).toList(),
+        sources: List<WebpSourceInfo>.of(_sources),
         outputPath: output,
         onProgress: (done, total, message) {
           if (!mounted) return;
@@ -454,6 +454,7 @@ class _SourceTile extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       '${source.width}×${source.height} · ${source.frameCount} 帧 · '
+                      '${source.durationEstimated ? '约 ' : ''}'
                       '${(source.durationMs / 1000).toStringAsFixed(1)} 秒',
                       style: TextStyle(color: palette.hint, fontSize: 12),
                     ),
