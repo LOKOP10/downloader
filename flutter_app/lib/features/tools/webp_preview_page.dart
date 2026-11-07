@@ -100,6 +100,7 @@ class _WebpPreviewPageState extends State<WebpPreviewPage> {
                 children: <Widget>[
                   Text(
                     '${source.width}×${source.height} · ${source.frameCount} 帧 · '
+                    '${source.durationEstimated ? '约 ' : ''}'
                     '${(source.durationMs / 1000).toStringAsFixed(1)} 秒',
                     style: const TextStyle(color: Colors.white, fontSize: 13),
                   ),

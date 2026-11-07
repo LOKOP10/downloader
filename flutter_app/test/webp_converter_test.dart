@@ -69,15 +69,22 @@ void main() {
 
   test('convert 拒绝空输入、非 mp4 输出、输入输出同路径', () async {
     await expectLater(
-      WebpToMp4.convert(sources: <String>[], outputPath: '/tmp/a.mp4'),
+      WebpToMp4.convert(sources: <WebpSourceInfo>[], outputPath: '/tmp/a.mp4'),
+      throwsA(isA<WebpConversionException>()),
+    );
+    final info = await WebpToMp4.probe(fixture.path);
+    await expectLater(
+      WebpToMp4.convert(
+        sources: <WebpSourceInfo>[info],
+        outputPath: '/tmp/a.mkv',
+      ),
       throwsA(isA<WebpConversionException>()),
     );
     await expectLater(
-      WebpToMp4.convert(sources: <String>[fixture.path], outputPath: '/tmp/a.mkv'),
-      throwsA(isA<WebpConversionException>()),
-    );
-    await expectLater(
-      WebpToMp4.convert(sources: <String>[fixture.path], outputPath: fixture.path),
+      WebpToMp4.convert(
+        sources: <WebpSourceInfo>[info],
+        outputPath: fixture.path,
+      ),
       throwsA(isA<WebpConversionException>()),
     );
   });
@@ -87,8 +94,9 @@ void main() {
     if (out.existsSync()) out.deleteSync();
     final progress = <int>[];
     try {
+      final info = await WebpToMp4.probe(fixture.path);
       final result = await WebpToMp4.convert(
-        sources: <String>[fixture.path],
+        sources: <WebpSourceInfo>[info],
         outputPath: out.path,
         fps: 20,
         onProgress: (done, total, message) => progress.add(done),
@@ -125,8 +133,9 @@ void main() {
     final out = File('${Directory.systemTemp.path}/_tmp_webp2mp4_multi.mp4');
     if (out.existsSync()) out.deleteSync();
     try {
+      final info = await WebpToMp4.probe(fixture.path);
       final result = await WebpToMp4.convert(
-        sources: <String>[fixture.path, fixture.path],
+        sources: <WebpSourceInfo>[info, info],
         outputPath: out.path,
       );
       expect(result.frames, 6);
@@ -144,7 +153,7 @@ void main() {
     try {
       await expectLater(
         WebpToMp4.convert(
-          sources: <String>[fixture.path],
+          sources: <WebpSourceInfo>[await WebpToMp4.probe(fixture.path)],
           outputPath: out.path,
           isCancelled: () => true,
         ),
