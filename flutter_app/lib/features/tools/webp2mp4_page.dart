@@ -9,6 +9,7 @@ import 'package:vdl/design/widgets/app_card.dart';
 import 'package:vdl/design/widgets/app_list_tile.dart';
 import 'package:vdl/features/download/data/download_location.dart';
 import 'package:vdl/features/tools/webp_converter.dart';
+import 'package:vdl/features/tools/webp_preview_page.dart';
 import 'package:vdl/shared/media_saver.dart';
 
 /// WebP 转 MP4：选一个或多个 WebP（含动图），逐帧转成 mp4 并登记到媒体库。
@@ -63,7 +64,7 @@ class _Webp2Mp4PageState extends State<Webp2Mp4Page> {
             Padding(
               padding: const EdgeInsets.only(left: 4, bottom: 6),
               child: Text(
-                '长按可拖动排序 · 第 1 个在最前，最后一个在最后',
+                '点缩略图放大看 · 长按拖动排序 · 第 1 个在最前，最后一个在最后',
                 style: TextStyle(color: palette.hint, fontSize: 12),
               ),
             ),
@@ -72,6 +73,7 @@ class _Webp2Mp4PageState extends State<Webp2Mp4Page> {
               busy: _busy,
               onReorder: _onReorder,
               onRemove: _remove,
+              onPreview: _openPreview,
             ),
           ],
           if (_sources.isNotEmpty) ...[
@@ -196,6 +198,18 @@ class _Webp2Mp4PageState extends State<Webp2Mp4Page> {
   }
 
   /// 拖动排序：列表顺序就是拼接顺序（第一个在最前）。
+  void _openPreview(int index) {
+    if (_sources.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => WebpPreviewPage(
+          sources: List<WebpSourceInfo>.unmodifiable(_sources),
+          initialIndex: index,
+        ),
+      ),
+    );
+  }
+
   void _onReorder(int oldIndex, int newIndex) {
     setState(() {
       final target = newIndex > oldIndex ? newIndex - 1 : newIndex;
@@ -344,12 +358,14 @@ class _SourceList extends StatelessWidget {
     required this.busy,
     required this.onReorder,
     required this.onRemove,
+    required this.onPreview,
   });
 
   final List<WebpSourceInfo> sources;
   final bool busy;
   final void Function(int oldIndex, int newIndex) onReorder;
   final void Function(WebpSourceInfo source) onRemove;
+  final void Function(int index) onPreview;
 
   @override
   Widget build(BuildContext context) {
@@ -383,6 +399,7 @@ class _SourceList extends StatelessWidget {
               isLast: index == sources.length - 1,
               busy: busy,
               onRemove: () => onRemove(source),
+              onPreview: () => onPreview(index),
             ),
           );
         },
@@ -398,6 +415,7 @@ class _SourceTile extends StatelessWidget {
     required this.isLast,
     required this.busy,
     required this.onRemove,
+    required this.onPreview,
   });
 
   final WebpSourceInfo source;
@@ -405,6 +423,7 @@ class _SourceTile extends StatelessWidget {
   final bool isLast;
   final bool busy;
   final VoidCallback onRemove;
+  final VoidCallback onPreview;
 
   @override
   Widget build(BuildContext context) {
@@ -470,23 +489,46 @@ class _SourceTile extends StatelessWidget {
 
   /// 动图预览：Image 对 frameCount > 1 的 WebP 会自动逐帧播放（与 GIF 同机制），
   /// cacheWidth 让解码直接降采样到显示尺寸（约 3x = 168px），不必把整帧读进内存。
+  /// 点一下打开全屏预览（可放大、可左右滑动切换）。
   Widget _thumb(AppPalette palette) {
     const double size = 56;
     const int cacheWidth = 168;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(6),
-      child: SizedBox(
-        width: size,
-        height: size,
-        child: Image.file(
-          File(source.path),
-          fit: BoxFit.cover,
-          cacheWidth: cacheWidth,
-          gaplessPlayback: true,
-          filterQuality: FilterQuality.low,
-          errorBuilder: (context, error, stack) => Container(
-            color: palette.divider,
-            child: Icon(Icons.broken_image_outlined, size: 20, color: palette.hint),
+    return GestureDetector(
+      onTap: onPreview,
+      behavior: HitTestBehavior.opaque,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              Image.file(
+                File(source.path),
+                fit: BoxFit.cover,
+                cacheWidth: cacheWidth,
+                gaplessPlayback: true,
+                filterQuality: FilterQuality.low,
+                errorBuilder: (context, error, stack) => Container(
+                  color: palette.divider,
+                  child: Icon(Icons.broken_image_outlined, size: 20, color: palette.hint),
+                ),
+              ),
+              // 右下角小放大镜，明示可以点开看大图。
+              Positioned(
+                right: 2,
+                bottom: 2,
+                child: Container(
+                  padding: const EdgeInsets.all(1),
+                  decoration: BoxDecoration(
+                    color: const Color(0x99000000),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                  child: const Icon(Icons.zoom_out_map, size: 10, color: Colors.white),
+                ),
+              ),
+            ],
           ),
         ),
       ),
