@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:vdl/design/colors.dart';
@@ -466,25 +468,27 @@ class _SourceTile extends StatelessWidget {
     );
   }
 
+  /// 动图预览：Image 对 frameCount > 1 的 WebP 会自动逐帧播放（与 GIF 同机制），
+  /// cacheWidth 让解码直接降采样到显示尺寸（约 3x = 168px），不必把整帧读进内存。
   Widget _thumb(AppPalette palette) {
-    const double size = 44;
-    final thumb = source.thumbnail;
+    const double size = 56;
+    const int cacheWidth = 168;
     return ClipRRect(
       borderRadius: BorderRadius.circular(6),
       child: SizedBox(
         width: size,
         height: size,
-        child: thumb == null
-            ? Container(
-                color: palette.divider,
-                child: Icon(Icons.image_outlined, size: 20, color: palette.hint),
-              )
-            : Image.memory(
-                thumb,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-                filterQuality: FilterQuality.low,
-              ),
+        child: Image.file(
+          File(source.path),
+          fit: BoxFit.cover,
+          cacheWidth: cacheWidth,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.low,
+          errorBuilder: (context, error, stack) => Container(
+            color: palette.divider,
+            child: Icon(Icons.broken_image_outlined, size: 20, color: palette.hint),
+          ),
+        ),
       ),
     );
   }
