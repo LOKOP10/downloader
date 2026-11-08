@@ -1,48 +1,105 @@
 # 视频下载器
 
-个人自用的多站点视频 / 图片下载工具。同一套能力用两套实现：
-
-- **Windows 桌面端** —— Python + PySide6，代码在 `douyin-downloader/`
-- **Android 端** —— Flutter，代码在 `flutter_app/`
+个人自用的多站点视频 / 图片下载工具。Windows 桌面端与 Android 端各一套实现，
+解析与下载链路完全独立，只共用「怎么做」的思路。
 
 仅供个人学习与备份使用。
 
-## 两端概览
+## 架构
 
-| 能力 | Windows 桌面端 | Android 端 |
+两端都是「界面 → 核心 → 基础设施」三层，**站点差异全部收敛在解析器里**。
+
+```
+桌面端                                     安卓端
+┌─────────────────────────┐            ┌─────────────────────────┐
+│ main.py                 │            │ lib/main.dart           │
+│   └ main_window.py 壳层 │            │   └ 四页签导航          │
+├─────────────────────────┤            ├─────────────────────────┤
+│ app/view/        界面层 │            │ lib/features/    功能层 │
+│   design 设计 token     │            │   parse   站点解析      │
+│   workspace 壳层组件    │  ───────   │   download 分段/HLS     │
+│   *_interface 九个页面  │   同一思路  │   manga library         │
+│ app/core/        核心层 │            │   settings              │
+│   parser 识别站点       │            │ lib/design/      设计层 │
+│   sites  解析直链       │            │ lib/shared/      共享层 │
+│   downloader 分段下载   │            │   链接识别 / HTTP       │
+│   各功能引擎            │            │ android/         平台桥 │
+├─────────────────────────┤            ├─────────────────────────┤
+│ proxy 系统代理          │            │ 封装合成 / 相册登记     │
+│ Edge 取 Cookie / ffmpeg │            │ 代理设置 / 前台服务     │
+└─────────────────────────┘            └─────────────────────────┘
+```
+
+### 桌面端（Python + PySide6）
+
+| 层 | 位置 | 职责 |
 |---|---|---|
-| 支持站点 | **9 个**（小红书、X、Instagram、YouTube 全支持） | **7 个**（少 YouTube、Instagram、Iwara） |
-| 抖音去水印 / 批量主页 | ✅ | ✅ |
-| 抖音图文里的动图转 GIF | ✅ | ❌ 只保存静态图 |
-| B 站 DASH 音视频合并 | ✅ ffmpeg | ✅ 原生 MediaMuxer（不需 ffmpeg） |
-| YouTube | ✅ yt-dlp 取格式 | ❌ 未接入 |
-| 禁漫（整本 zip + 书架阅读） | ✅ | ✅ |
-| 多连接分段下载 | ✅ 1–32 连接 | ✅ 4–16 段可调 |
-| 后台下载（切后台 / 锁屏不断） | 不适用（桌面窗口最小化照常跑） | ✅ 前台服务 + 通知进度 |
-| 本地视频库（封面 / 续播 / 倍速） | ✅ | ❌ |
-| WebP 转 MP4 / MP4 转 GIF | ✅ | ❌（抖音动图在下载时直接转 GIF） |
-| 导出视频原始帧（时间轴拖两端夹取 → 逐帧导出 + 回放） | ✅ | ❌ |
-| 保存目录 | 设置里选任意可写目录 | 系统文件管理器选目录（SAF）或手填路径 |
-| 界面 | 顶部标签 + 内容画布，九个页面 | 底部四页签：首页 / 任务 / 书架 / 设置 |
+| 入口 / 壳层 | `main.py`、`app/main_window.py` | 标题栏 + 侧栏 + 内容画布 + 状态条 |
+| 界面 | `app/view/` | `design.py` 设计 token、`workspace.py` 壳层组件、`*_interface.py` 九个页面 |
+| 解析 | `app/core/parser.py`、`sites.py` | 识别链接所属站点，产出画质与直链 |
+| 下载 | `app/core/downloader.py` | IDM 式多连接分段，1–32 连接 |
+| 功能引擎 | `app/core/` | `webp_converter` / `mp4_to_gif` / `frame_export` / `video_library` / `manga` |
+| 基础设施 | `app/core/` | `proxy.py` 系统代理、`browser_bridge.py` 驱动本机 Edge 取 Cookie、`ffmpeg.py` 合并组件 |
 
-两端解析与下载链路是独立实现，只有「思路」共用；改一个站点要两端分别改。
+数据流：粘贴链接 → 识别站点 → 解析出画质 → 选画质 → 分段下载 → 落盘 → 自动入库。
+
+### Android 端（Flutter）
+
+| 层 | 位置 | 职责 |
+|---|---|---|
+| 界面 | `lib/features/*/`、`lib/design/` | 首页 / 任务 / 书架 / 设置四个页签，配色与通用组件 |
+| 解析 | `lib/features/parse/` | 一个站点一个解析器，产出统一的媒体信息 |
+| 下载 | `lib/features/download/` | 多连接分段、HLS 分片、DASH 合并、任务队列、后台保活 |
+| 共享 | `lib/shared/` | 站点枚举、链接识别、HTTP（含 Cloudflare 专用通道）、相册登记 |
+| 平台桥 | `android/` | 音视频封装合成、相册写入、代理设置、前台服务 |
+
+数据流：链接 → 识别 → 解析 → 下载（分段 / HLS / DASH）→ 原生合成 → 登记进媒体库。
+
+### 共同约定
+
+- **加一个站点 = 加一个解析器 + 在站点表登记**，其它层不用动。
+- 解析与下载解耦：解析层只产出媒体信息与直链，下载层只认地址列表。
+- 两端不共享代码：改一个站点要两端分别改。
+- 功能引擎各自独立，界面层不直接处理字节流。
+
+## 目录结构
+
+```
+.
+├── douyin-downloader/     # Windows 桌面端（Python + PySide6）
+│   ├── main.py            # 入口
+│   ├── app/core/          # 解析 / 下载 / 各功能引擎 / 配置
+│   ├── app/view/          # 界面与设计 token
+│   ├── installer/         # 安装包脚本
+│   ├── tests/             # 单元测试
+│   └── app_version.txt    # 版本号唯一来源
+├── flutter_app/           # Android 端（Flutter）
+│   ├── lib/features/      # 解析 / 下载 / 漫画 / 书架 / 设置 / 工具
+│   ├── lib/design/        # 配色、主题、通用组件
+│   ├── lib/shared/        # 站点枚举、链接识别、HTTP
+│   ├── test/              # 离线单测与组件测试
+│   └── android/           # 安卓工程与原生桥
+├── docs/                  # 补充文档（见文末索引）
+├── release-notes/         # 各版本发布说明
+└── website/               # 静态下载页
+```
 
 ## 快速开始
 
 ### Windows 桌面端
 
-环境要求：Windows 10 / 11、Python 3.10+（开发用 3.13）、本机已装 Microsoft Edge
-（Playwright 直接调用本机 Edge，**不需要** `playwright install chromium`）。
+环境：Windows 10 / 11、Python 3.10+（开发用 3.13）、本机已装 Microsoft Edge
+（直接驱动本机 Edge 取 Cookie，**不需要**额外下载浏览器内核）。
 
 ```bash
 cd douyin-downloader
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-python main.py          # 或双击 run.bat（pythonw 启动，不弹控制台）
+python main.py          # 或双击 run.bat（不弹控制台）
 ```
 
-打包（**默认文件夹版 onedir**；`dist/` 只保留一份可运行目录，目录名 = 当前版本号）：
+打包为文件夹版（推荐；单文件版每次启动要解包到临时目录，慢一倍多）：
 
 ```powershell
 pyinstaller --noconfirm --distpath dist/<version> build_exe.spec
@@ -50,296 +107,79 @@ powershell -ExecutionPolicy Bypass -File installer/sync_dist.ps1
 powershell -ExecutionPolicy Bypass -File installer/build_setup.ps1
 ```
 
-`sync_dist.ps1` 把旧版本目录改名成当前版本（`config.json`、`edge_profile*` 登录态、视频库都跟着走），
-并把桌面与目录内快捷方式指向新路径。产物：`dist/<version>/视频下载器.exe` + `dist/<version>/_internal/`
-与 `dist/视频下载器-<version>-setup.exe`。版本号唯一来源是 `app_version.txt`，升级时同步
-`installer/setup.iss` 的 `MyAppVersion` 与 `installer/README.txt`。
-
-### 为什么默认文件夹版（2026-11-02 实测，v1.8.18，同一台机器同一份代码）
-
-| 形态 | 双击 → 窗口出现 | 其中「启动前解包」 | 依赖 `%TEMP%` 可写 |
-|---|---|---|---|
-| 单文件 onefile（126 MB） | 6.0 s | 4.4 s | 是 |
-| 文件夹 onedir（exe 15.6 MB + `_internal` 283 MB） | 2.6 ~ 3.2 s | 无此阶段 | 否 |
-
-单文件版每次启动都要把整包解包到 `%TEMP%\_MEIxxxxx`，解包失败就直接弹
-`Could not create temporary directory!` 并退出（不进 Python，日志里不留任何记录）。
-文件夹版的 EXE **必须与 `_internal/` 一起保留**（一起复制、一起删除），安装包按
-`installer/setup.iss` 的 `_internal\*` 规则带走。运行期临时文件用自身目录的 `.runtime-temp/`，
-只改本进程及其子进程环境，不动 Windows 用户环境变量。
-
-确实需要单文件（只想分发一个可执行文件）时显式指定：
-
-```powershell
-$env:VDL_BUILD_MODE = "onefile"
-python -m PyInstaller --noconfirm --distpath dist/portable-build build_exe.spec
-```
-
-测试：
-
-```bash
-cd douyin-downloader
-python -m pytest tests -q      # 当前全量 271 项（含 46 项子测试）
-```
-
-MP4 转 GIF / WebP 转换测试会调用本机 ffmpeg；打包目录可把 `dist/tools` 加入 PATH。
-
 ### Android 端
 
-环境要求：Flutter 3.47（Dart 3.13）、Android SDK 34（`compileSdk`/`targetSdk` = 34，`minSdk` = 24）、JDK 17+。
+环境：Flutter 3.47（Dart 3.13）、Android SDK 34（`minSdk` 24）、JDK 17+。
 
 ```bash
 cd flutter_app
 flutter pub get
-flutter build apk --release     # 产物：build/app/outputs/flutter-apk/app-release.apk
-flutter test                    # 163 项离线单测 / 组件测试
+flutter build apk --release    # 产物 build/app/outputs/flutter-apk/app-release.apk
+flutter test                   # 离线单测与组件测试
 ```
 
-包名 `com.xd.vdl.flutter`。
-实现细节、站点能力与踩坑记录见 **`flutter_app/README.md`**。
+### 从 clone 到能跑
+
+仓库只提交源码，**克隆下来不能直接运行**，以下都要自己准备：
+
+| 需要什么 | 怎么来 |
+|---|---|
+| Python 依赖 | `pip install -r requirements.txt` |
+| Flutter 依赖 | `flutter pub get` |
+| ffmpeg（B 站 / YouTube 音视频合并、GIF 转换） | 桌面端在「设置 → 合并组件」里下载，不是 pip 依赖 |
+| 本机 Edge | 桌面端取 Cookie 用，需系统已安装 |
+| 各站点登录态 | 设置页填 Cookie，或用内置登录流程导入 |
+
+`dist/`、`build/`、`.venv/`、`edge_profile*/`、`*.exe`、`*.apk` 等构建产物与敏感目录
+都在 `.gitignore` 里。
 
 ## 支持的站点
 
-| 站点 | 说明 | 两端 |
+| 站点 | 能力 | 两端 |
 |---|---|---|
 | 抖音 | 去水印、作者主页批量、图文动图转 GIF | 桌面 ✅ / 安卓 ✅（动图只存静态图） |
-| B 站 | DASH 音视频自动合并 | 桌面 ✅ ffmpeg / 安卓 ✅ MediaMuxer |
-| 小红书 | 需用 App 分享的链接（含 `xsec_token`） | 两端 ✅ |
-| X (Twitter) | 敏感内容推文需填 `auth_token` / `ct0` | 两端 ✅ |
-| Instagram | 需登录的内容要填 Cookie | 仅桌面 |
-| YouTube | 高画质为音视频分离，需 ffmpeg 合并；需能访问 YouTube | 仅桌面 |
-| Pornhub | 纯 HTTP（播放页 flashvars）；⚠️ 2026-10 起站点只发 HLS | 桌面只到解析层 / 安卓可下（拼成 `.ts`） |
-| hanime1 | 纯 HTTP + curl_cffi 指纹（站点认 TLS），免登录，页面无时长字段 | 两端 ✅ |
-| 禁漫天堂 | 种子号解析；安卓端另有整本下载 + 书架 | 两端 ✅ |
+| B 站 | DASH 音视频自动合并 | 桌面 ✅ ffmpeg / 安卓 ✅ 原生合成 |
+| 小红书 | 需 App 分享链接（含 `xsec_token`） | 两端 ✅ |
+| X (Twitter) | 敏感内容需填 `auth_token` / `ct0` | 两端 ✅ |
+| Instagram | 需登录内容要填 Cookie | 仅桌面 |
+| YouTube | 高画质音视频分离，需 ffmpeg 合并 | 仅桌面 |
+| Pornhub | 站点已改 HLS | 桌面只到解析层 / 安卓可下 |
+| hanime1 | 需 TLS 指纹，免登录 | 两端 ✅ |
+| 禁漫天堂 | 种子号解析；安卓另有整本下载 + 书架 | 两端 ✅ |
 
-安卓端两个站（hanime1 / Pornhub 的 HLS CDN）都在 Cloudflare 后面，
-`dart:io` 的 `HttpClient` 会被 403/410，必须走 `lib/shared/net/browser_http.dart`（裸 TLS + Chrome 头序）。
+## 能力对照
 
-## 目录结构
+| 能力 | 桌面端 | 安卓端 |
+|---|---|---|
+| 支持站点 | 9 个 | 7 个 |
+| 多连接分段下载 | 1–32 连接 | 4–16 段可调 |
+| 音视频合并 | ffmpeg | 原生合成，无需 ffmpeg |
+| 后台下载 | 窗口最小化照常跑 | 前台服务 + 通知进度 |
+| 本地视频库（封面 / 续播 / 倍速） | ✅ | ❌ |
+| WebP 转 MP4 / MP4 转 GIF / 导出原始帧 | ✅ | ❌ |
+| 漫画书架与阅读器 | ✅ | ✅ |
+| 保存目录 | 设置里选任意可写目录 | 系统文件管理器选目录（SAF） |
 
-```
-.
-├── douyin-downloader/          # Windows 桌面端（Python + PySide6）
-│   ├── main.py                 # 入口
-│   ├── app/
-│   │   ├── core/               # 核心逻辑：解析、下载、配置、日志
-│   │   │   ├── sites.py        # 各站点解析规则（主要体量在这里）
-│   │   │   ├── youtube.py      # YouTube 解析（yt-dlp 取格式，下载仍由本程序做）
-│   │   │   ├── downloader.py   # 分段下载（IDM 式多连接）
-│   │   │   ├── parser.py       # 链接识别与路由
-│   │   │   ├── domain.py       # 各站点域名集合与 Referer 规则
-│   │   │   ├── site_ctx.py     # 站点上下文（Cookie / profile 目录 / 选项）
-│   │   │   ├── models.py       # 数据模型（VideoInfo 等）
-│   │   │   ├── manga.py        # 本地漫画书架、自然排序、阅读进度与书架迁移
-│   │   │   ├── video_library.py # 本地视频库：扫描、封面、续播进度与持久化
-│   │   │   ├── webp_converter.py # WebP 转 MP4 引擎
-│   │   │   ├── mp4_to_gif.py   # MP4 转 GIF 引擎（两遍调色板）
-│   │   │   ├── frame_export.py # 导出原始帧：时间段截取、逐帧导出、进度与取消
-│   │   │   ├── config.py       # 配置读写（DEFAULT_CONFIG 是默认值唯一来源）
-│   │   │   ├── workers.py      # 后台线程（登录、预览、封面）
-│   │   │   ├── proxy.py        # 系统代理读取
-│   │   │   ├── ffmpeg.py       # 音视频合并组件管理
-│   │   │   ├── browser_bridge.py  # Playwright 驱动本机 Edge 取 Cookie
-│   │   │   ├── jmcomic_bridge.py  # 禁漫图片解码
-│   │   │   └── xhsapi/         # 小红书签名直连（vendor，见该目录 __init__ 的许可说明）
-│   │   ├── view/               # 界面（qfluentwidgets）
-│   │   │   ├── design.py       # 设计 token：颜色 / 间距 / 字阶 / 动效
-│   │   │   ├── workspace.py    # 壳层组件：侧栏导航、面板、状态条、设置行、分段控件
-│   │   │   ├── frame_player.py # 导出帧的回放器（按源帧率换帧播放）
-│   │   │   └── *_interface.py  # 九个页面：解析 / 批量 / 任务 / 漫画 / 本地视频 / WebP / GIF / 原始帧 / 设置
-│   │   └── main_window.py      # 窗口壳层：标题栏 + 侧栏 + 内容画布 + 状态条
-│   ├── assets/                 # 图标资源
-│   ├── installer/              # Inno Setup 安装包脚本
-│   ├── reference/              # 第三方参考实现，不参与构建（见其 README）
-│   ├── tests/                  # 单元测试
-│   ├── build_exe.spec          # PyInstaller 打包配置
-│   ├── app_version.txt         # 版本号唯一来源（exe 版本资源）
-│   ├── requirements.txt
-│   └── config.json             # 运行时配置（首次运行自动生成）
-│
-└── flutter_app/                # Android 端（Flutter）
-    ├── lib/
-    │   ├── features/parse/     # 各站点解析器（抖音/小红书/B站/X/Pornhub/hanime1）
-    │   ├── features/download/  # 多连接下载、HLS 分片、DASH 合并、任务队列、后台保活
-    │   ├── features/manga/     # 禁漫接口、切片重排、书架与本地漫画阅读器
-    │   ├── features/library/   # 书架页
-    │   ├── features/settings/  # 设置页
-    │   └── shared/             # 站点枚举、链接识别、HTTP（含 Cloudflare 专用 browser_http）
-    ├── test/                   # 离线单测 / 组件测试
-    ├── tool/                   # 端到端实测脚本（check_*.dart）
-    └── android/                # Flutter 的 Android 工程（原生桥：Muxer / 图片重排 / MediaStore / 前台服务）
-```
+## 更多文档
 
-仓库只提交源码。`dist/`、`build/`、`.venv/`、`edge_profile/`、`*.exe`、`*.apk` 等构建产物和敏感目录
-都在 `.gitignore` 里，需要自行构建。
-
-## 桌面端功能细节
-
-### 界面与使用
-
-「左侧导航 + 内容画布」的单窗口工作台：视频解析、批量下载、下载任务、漫画阅读器、本地视频、
-WebP 转 MP4、MP4 转 GIF、设置八页，底部状态条常驻显示后台任务数、保存目录与版本。
-
-1. 粘链接，程序识别站点并解析，选画质，下载。
-2. 下载完成后可自动复制文件到剪贴板（配置项 `auto_copy_file`）。
-3. 需要登录的站点（X / Instagram / 小红书 / 禁漫）在设置页填 Cookie，或用内置的浏览器登录流程导出。
-4. B 站 / YouTube 的 DASH 合并需要 ffmpeg，在「设置 → 合并组件（ffmpeg）」里下载，不是 pip 依赖。
-   YouTube 需要能访问外网，程序会自动使用 Windows 系统代理。
-5. 解析失败或下载卡住，看 `logs/app.log`。
-
-### 本地视频库
-
-- 下载完成的视频自动入库，只收真正的视频文件，同名封面图不会误入库；也可用「导入文件夹」递归导入或直接拖入。
-- 卡片墙显示封面（优先用下载封面，没有就截首帧）、标题与时长；支持搜索、按最近播放或名称排序。
-- 双击卡片打开播放器并从上次位置继续（单击只选中，误点一下不会弹出播放器）；
-  播放器支持 0.5×–2.0× 倍速、F11 全屏、进度拖动与键盘快捷键。
-- 右键菜单可「复制视频到剪贴板」：登记的是文件本身（CF_HDROP），粘到文件夹里就是复制文件、
-  粘到聊天窗或输入框里得到的是路径；另有从头播放、打开文件夹与删除（可选仅移除记录或连源文件一起删）。
-- 播放进度保存在程序目录 `video_library.json`（原子写 + 备份），源视频不被修改；文件移动后记录保留，重新导入即可找回。
-- 复用系统解码器；无法播放的格式会明确报错，不会从书架静默消失。
-
-### WebP 转 MP4
-
-- 原生页面，不启动 HTTP 服务器、不上传文件。支持多选 / 拖放、列表排序、批量独立转换及按列表顺序合并为一个 MP4。
-- 支持 CRF 画质与不透明背景色；透明区域合成到所选背景，MP4 不含透明通道或音频。
-- 保留每帧毫秒时长（可变帧率），动画只播放一轮；静态 WebP 为 100ms，奇数尺寸补到偶数。
-- 合并时取所有输入的最大宽高作为统一画布，保持原图居中、不拉伸裁剪。
-- 复用下载器已有 ffmpeg，缺少时到设置下载；后台转换可取消，默认不覆盖已有输出。
-- 编码失败或取消不会替换已有输出；输入文件不被修改，临时帧自动清理。限画布 1600 万像素、总 2 万帧、
-  单文件 256 MiB，临时 PNG 按实际占用限制 2 GiB，逐帧检查剩余空间，不以未压缩体积预估拒绝。
-- 默认不覆盖采用原子硬链接发布，需要支持硬链接的本地文件系统（如 NTFS）；不支持时明确报错，
-  不会降级为可能留下半成品的覆盖拷贝。
-- 默认输出至下载目录的 `converted` 子目录，可选择其他可写目录；转换结果可用系统播放器预览。
-
-### MP4 转 GIF
-
-- 原生页面，不启动 HTTP 服务器、不上传文件。支持多选 / 拖放与批量转换；每个 MP4 独立输出同名 `.gif`，默认不覆盖同名文件。
-- 可设置帧率（10/15/20/24）、宽度（320/480/640/原宽）、起始时间、转换时长、颜色数（64/128/256）、Bayer 抖动与是否无限循环。
-- 起始时间与时长支持秒数、`分:秒`、`时:分:秒`；时长留空表示从起始时间到结尾。
-- 采用 FFmpeg 两遍调色板（palettegen + paletteuse），避免逐帧独立调色导致闪烁；音频、字幕与数据流丢弃，只保留视频画面。
-- 复用下载器已有 ffmpeg（缺失时到「设置 → 合并组件」下载）；后台线程转换可取消。
-- 输出先写入目标目录下的临时目录，成功后才原子发布；失败或取消不会留下残片，也不修改源视频。默认通过排他硬链接发布。
-- 安全上限：单文件 8 GiB、输出宽 ≤1920、时长 ≤300 秒、≤1500 帧；超限时明确报错，不静默截断。
-- 转换结果可用系统默认图片查看器预览，或直接打开输出目录。
-
-```bash
-cd douyin-downloader
-python -m unittest discover -s tests -p "test_mp4_to_gif.py" -v
-python -m unittest discover -s tests -p "test_gif_interface.py" -v
-```
-
-### 抖音图文动图转 GIF
-
-- 解析抖音图文作品时，若某张图带 Live Photo 视频轨（`images[].video.play_addr`），该图会作为动图任务下载视频轨，
-  完成后自动转成同名 GIF（默认 15fps、480 宽、256 色、Bayer 抖动、无限循环）。
-- 普通静态图仍按原逻辑保存为 JPG/WebP；动图与静态图混排时各自独立，某项失败不影响其余项。
-- 动图任务在「下载任务」里先显示下载进度，随后进入「转换中」；转换失败保留已下载的 MP4，并在任务错误里显示原因。
-- 分享页对图文作品常只下发静图，动图视频轨在浏览器详情接口里；解析时会自动用详情接口补齐，无需手动切换。
-- 若详情接口也拿不到视频轨（风控/登录态），则按普通图集下载，不会生成 GIF。
-
-### 漫画阅读器（Windows）
-
-左侧导航「漫画阅读器」提供本地漫画书架，不需要另外安装阅读器或 .NET 运行环境。
-
-- **添加漫画**：选择一本漫画的文件夹，每张 `.jpg` / `.jpeg` 是一页（支持大写扩展名与章节子目录）。
-- **导入漫画库**：选择总目录，每个子文件夹作为一本漫画。可将一本或多本的文件夹直接拖进书架。
-- 页面按相对路径自然排序，例如 `第2章/2.jpg` 在 `第2章/10.jpg`、`第10章/1.jpg` 之前。
-- 点击封面继续阅读；支持搜索、最近阅读、收藏、按名称或进度排序，右键可移除记录，原图片保留。
-- 禁漫任务下载成功后自动加入漫画书架（不自动弹窗），保留已有收藏与阅读进度；失败和取消不入库，书架忙时排队处理。
-- 下载任务里的独立文件夹 JPG 图集、禁漫任务仍提供「阅读漫画」按钮；视频封面不会把整个下载目录误导入。
-- 「更多 → 导入独立页间阅读器书架」可选择 `%LOCALAPPDATA%\FolderMangaReader\library.json`，导入此前独立版的收藏与进度；已有记录不会被覆盖。
-- 新增或移除图片后可刷新书架；每次打开漫画也会重新扫描。
-- 当前桌面阅读器支持 JPG/JPEG 文件夹，不直接读取 ZIP/CBZ；单张源图超过 1600 万像素会明确提示，避免解码内存失控。
-- 多实例同时修改书架时会拒绝陈旧快照保存并提示重新加载，不会静默覆盖另一实例的新记录。
-
-阅读快捷键：左右键、PageUp / PageDown 翻页；Home / End 跳到首尾；空格向下滚一屏，到底后翻页；
-Ctrl + 滚轮、`+` / `-` 缩放，`0` 恢复适配。F11 或双击全屏，Tab 隐藏工具栏，Esc 退出全屏或返回书架。
-「适合宽度」用于长图，「从右到左」交换左右键和图片两侧的翻页方向。
-
-书架、进度与阅读偏好保存在程序目录的 `manga_library.json`（原子替换并保留上一份有效备份
-`manga_library.json.bak`）。损坏记录会尝试备份恢复，原漫画图片不会被修改。书架包含个人本地路径，
-已加入 `.gitignore`。移动漫画文件夹后请重新添加新路径，再移除旧记录。
-
-漫画功能复用 PySide6 与项目现有 UI 组件，无新增运行依赖。
-
-```bash
-cd douyin-downloader
-python -m unittest discover -s tests -p "test_manga*.py" -v
-```
-
-## Android 端（Flutter）
-
-以下只列关键结论，完整实现与踩坑见 `flutter_app/README.md`。
-
-- **站点**：抖音、小红书、B 站、X、Pornhub、hanime1、禁漫（YouTube / Instagram / Iwara 未接入）。
-- **解析全走纯 HTTP**：抖音不依赖 WebView；hanime1 / Pornhub 的 HLS CDN 走裸 TLS + Chrome 头序。
-- **下载**：多连接分段（设置里「并发分段数」4 / 8 / 12 / 16，默认 8，每段不小于 8MB）；B 站 DASH 用原生
-  MediaMuxer 合并；Pornhub 目前只有 HLS，按分片下载拼成 `.ts`；速度显示用 300ms 窗口的指数滑动平均。
-- **后台下载**：有任务时挂前台服务（`foregroundServiceType=dataSync`），通知栏显示
-  「正在下载 N 个任务 · 45% · 3.2 MB/s」并带进度条；全部结束自动撤掉。国产 ROM 还需允许「后台运行 / 自启动」。
-- **落盘与相册**：下载完成的成品会登记进系统媒体库（否则相册能看、QQ/微信「最近图片」看不到）；
-  设置里另有「重新登记到媒体库」给旧文件补登记。书架封面用隐藏文件名 `.书名.cover.jpg`，不会污染相册。
-- **保存位置**：视频/图片与漫画两套配置，都可用系统文件管理器选目录（SAF）或手填绝对路径。
-- **书架**：本地漫画（zip / 图片文件夹）离线阅读，进度持久化，预览整本连续下滑，阅读器底部可「保存到相册」。
-- **禁漫**：7 个图片镜像（下载前按首字节实测延迟排序，主用最快两个、失败降级）；单页失败会重试并换镜像，
-  缺页整本中止，不产出残缺 zip。
-
-## 配置文件
-
-桌面端 `config.json` 的默认值与 `app/core/config.py` 的 `DEFAULT_CONFIG` 一致（那里是默认值唯一来源）：
-
-```jsonc
-{
-  "download_path": "",              // 留空则用 <用户目录>/Downloads/DouyinDownloader
-  "cookie": "",                     // 抖音 Cookie
-  "x_cookie": "",                   // X(Twitter)
-  "ins_cookie": "",                 // Instagram
-  "bili_cookie": "",                // Bilibili
-  "xhs_cookie": "",                 // 小红书
-  "jm_cookie": "",                  // 禁漫天堂（AVS）
-  "naming_rule": "unique_id",       // unique_id / timestamp / author_title / title / id_title
-  "max_concurrent": 3,              // 同时下载数
-  "theme": "dark",                  // dark / light / auto
-  "accent_color": "deepsea",        // 界面强调色（见 view/design.ACCENTS，共 9 套）
-  "create_author_folder": true,     // 按作者建子目录
-  "download_cover": false,          // 同时下载封面
-  "auto_copy_file": true,           // 下载完成后复制文件到剪贴板
-  "mica_effect": false,             // Win11 云母特效（会降低滚动流畅度）
-  "reduce_motion": false,           // 关闭界面动效
-  "timeout": 15,
-  "segment_download": true,         // 多连接分段下载（IDM 式加速）
-  "segment_connections": 8          // 每文件并发连接数，1-32
-}
-```
-
-`config.json` 里会存 Cookie，不要提交到公开仓库。
-
-安卓端的对应设置存在 `SharedPreferences`（Cookie 在 `vdl_cookies`，保存目录、并发分段数等各占一个键）。
-
-## 几点说明
-
-- Cookie 在桌面端明文存在 `config.json`，安卓端存在 `SharedPreferences`，都不加密。
-- 桌面端用 Playwright 驱动本机 Edge 时会生成 `edge_profile*/`（每个平台一个），里面是登录态，已在 `.gitignore` 排除。
-  新增平台时记得同步 `core/config.py` 的属性与 `installer/setup.iss` 卸载逻辑，否则卸载后会残留登录凭据。
-- 禁漫的 `SECRET`（如 `185Hcomic3PAPP7R`，见 `flutter_app/lib/features/manga/data/jm_client.dart` 与
-  `jmcomic_bridge.py`）是该 App 通信协议的公开逆向常量，不是个人凭据。
-- 桌面端支持多连接分段下载；若需要代理的站点报 `CONNECT tunnel failed, response 502`，多半是本地代理端口变了
-  而系统代理没跟着更新 —— `core/proxy.py` 会自动探测可用端口。
+| 文档 | 内容 |
+|---|---|
+| [`docs/desktop-features.md`](docs/desktop-features.md) | 桌面端完整功能说明（视频库、转换工具、漫画阅读器） |
+| [`docs/configuration.md`](docs/configuration.md) | 配置项逐条说明与运行注意事项 |
+| [`flutter_app/README.md`](flutter_app/README.md) | 安卓端实现细节与踩坑记录 |
 
 ## 第三方代码与许可
 
-本仓库**未声明许可证**（个人自用项目，保留所有权利）。未授权任何人使用、复制、修改或分发本仓库内容。
-仓库内另含以下第三方代码，授权状态各不相同：
+本仓库**未声明许可证**（个人自用项目，保留所有权利）。未授权任何人使用、复制、修改或分发。
 
 | 位置 | 来源 | 许可证 | 参与构建 |
 |---|---|---|---|
 | `douyin-downloader/app/core/xhsapi/` | [cv-cat/Spider_XHS](https://github.com/cv-cat/Spider_XHS)（派生裁剪） | **上游未声明** | 是 |
 | `douyin-downloader/reference/ref_xbogus.py` | [Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API) | Apache-2.0 | 否（仅参考） |
-| `douyin-downloader/installer/ChineseSimplified.isl` | [Inno Setup 简体中文翻译](https://github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation)（文件头保留维护者信息） | 随上游 | 是 |
+| `douyin-downloader/installer/ChineseSimplified.isl` | [Inno Setup 简体中文翻译](https://github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation) | 随上游 | 是 |
 
-> **`xhsapi/` 的授权状态不明确**：上游仓库没有 LICENSE 文件（GitHub 的 license 接口返回 404），
-> 未声明许可证即默认保留所有权利。本仓库目前是个人自用，但**若要对外分发或给本仓库加许可证，
-> 必须先解决这一条** —— 详见 `app/core/xhsapi/__init__.py` 里的说明。
+> `xhsapi/` 的上游没有 LICENSE 文件，未声明许可证即默认保留所有权利。本仓库目前仅个人自用；
+> **若要对外分发或为本仓库加许可证，必须先解决这一条** —— 详见 `app/core/xhsapi/__init__.py`。
 
 ## 免责
 
