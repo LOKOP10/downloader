@@ -16,7 +16,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        // 加 .flutter 后缀：与原 Kotlin 版（com.xd.vdl）包名不同，两者可共存；
+        // 加 .flutter 后缀与既有包名（com.xd.vdl）区分，两者可共存；
         // 同包名但签名不同会导致「应用未安装」。
         applicationId = "com.xd.vdl.flutter"
         // You can update the following values to match your application needs.

@@ -28,7 +28,7 @@ object ProxyBridge {
             if (proxy != null && proxy != Proxy.NO_PROXY) {
                 val address = proxy.address()
                 if (address is InetSocketAddress && address.port > 0) {
-                    // Kotlin 映射：getHostString() → hostString，getHostName() → hostName（大写 N）
+                    // 属性映射：getHostString() → hostString，getHostName() → hostName（大写 N）
                     val host = address.hostString ?: address.hostName
                     if (!host.isNullOrBlank()) return host + ":" + address.port
                 }
