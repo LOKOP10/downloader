@@ -228,7 +228,8 @@ class VideoInterface(QWidget):
         header.addWidget(self.heading, 1)
         self.refreshBtn = PushButton(FIF.SYNC, "检查文件", self)
         self.refreshBtn.setToolTip(
-            "核对每个视频的源文件是否还在：已被删除的记录自动清理，缺封面的补上。\n"
+            "扫描下载目录这一层，把新出现的视频补进库（不进子文件夹）；"
+            "同时核对已有记录：已被删除的自动清理，缺封面的补上。\n"
             "外置盘 / 网络盘暂时没连上时只提示，不会清掉记录。")
         self.refreshBtn.clicked.connect(self.refresh_files)
         self.moreBtn = PushButton(FIF.MORE, "更多", self)
@@ -542,8 +543,9 @@ class VideoInterface(QWidget):
 
     # ------------------------------------------------------------------ 维护
     def refresh_files(self):
-        """「检查文件」：核对源文件，已删除的记录直接清掉，缺封面的补上。
+        """「检查文件」：先扫下载目录这一层补入新视频，再核对已有记录。
 
+        扫描只认下载目录这一层（父文件夹），批量下载建的作者子文件夹不进。
         判定分三档，避免把「暂时看不到」当成「已经删了」：
           文件还在          → 保留；
           文件没了、目录还在 → 确实被删，移除记录（卡片随之消失）；
@@ -552,14 +554,24 @@ class VideoInterface(QWidget):
         if self._busy or self._closed:
             return
         items = list(self.library.videos)
-        if not items:
-            self.status.setText("视频库是空的：没有需要检查的记录")
-            return
+        # 注意：库为空也要继续往下走 —— 这时「检查文件」等于「扫描下载目录导入」。
         self._set_busy(True)
         self.status.setText("正在检查视频文件…")
         ffmpeg, covers_dir = self._ffmpeg, self._covers_dir
 
         def scan():
+            # 先扫一遍下载目录这一层：父文件夹里新出现的视频直接补进库。
+            # 只认这一层，批量下载建的作者子文件夹不进（与导入、自动入库口径一致）。
+            fresh = []
+            root_dir = (self.ctx.config.get("download_path") or "").strip()
+            if root_dir and os.path.isdir(root_dir):
+                known = {folder_key(item.path) for item in items}
+                for found_path in scan_videos(root_dir):
+                    if folder_key(found_path) in known:
+                        continue
+                    cover_shot = (find_downloaded_cover(found_path)
+                                  or extract_first_frame(found_path, ffmpeg, covers_dir))
+                    fresh.append((found_path, cover_shot))
             results = []
             for item in items:
                 if os.path.isfile(item.path) and is_video(item.path):
@@ -573,15 +585,22 @@ class VideoInterface(QWidget):
                     results.append((item, "gone", ""))
                 else:
                     results.append((item, "offline", ""))
-            return results
+            return results, fresh
 
-        def done(results, error):
+        def done(payload, error):
             self._set_busy(False)
             if self._closed:
                 return
             if error:
                 self.status.setText(f"检查失败：{error}")
                 return
+            results, fresh = payload
+            added = 0
+            for found_path, cover_shot in fresh:
+                item = self.library.add(found_path, "")
+                if cover_shot and not item.cover:
+                    item.cover = cover_shot
+                added += 1
             gone = [item for item, state, _ in results if state == "gone"]
             offline = sum(1 for _, state, _ in results if state == "offline")
             filled = 0
@@ -591,21 +610,24 @@ class VideoInterface(QWidget):
                     filled += 1
             for item in gone:
                 self.library.remove(item)
-            saved = self._save() if (gone or filled) else True
+            saved = self._save() if (gone or filled or added) else True
             if gone:
                 # 卡片集合变了，丢掉旧的封面解码代次，避免回填到已移除的条目
                 self._cover_generation += 1
             self.refresh_shelf()
-            self.status.setText(self._check_summary(len(items), gone, offline, filled, saved))
+            self.status.setText(
+                self._check_summary(len(items), gone, offline, filled, saved, added))
 
         self.jobs.start(scan, done)
 
     @staticmethod
-    def _check_summary(total, gone, offline, filled, saved):
-        """「检查文件」结果的一句话结论：先说清理了什么，再说保留了哪些。"""
+    def _check_summary(total, gone, offline, filled, saved, added=0):
+        """「检查文件」结果的一句话结论：先说新增与清理，再说保留了哪些。"""
         if not saved:
             return "视频记录保存失败，本次检查未落盘；请「更多 → 重新加载」后再试。"
         parts = []
+        if added:
+            parts.append(f"新收录 {added} 个视频")
         if gone:
             parts.append(f"已清理 {len(gone)} 条失效记录（源文件已不存在）")
         if offline:

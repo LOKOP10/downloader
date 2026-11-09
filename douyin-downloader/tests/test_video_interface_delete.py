@@ -110,6 +110,23 @@ class VideoInterfaceDeleteTest(unittest.TestCase):
         self.assertEqual(self.names(), ["alive.mp4", "gone.mp4"])
         self.assertIn("已清理 1 条失效记录", self.page.status.text())
 
+    def test_check_files_scans_download_folder(self):
+        """「检查文件」顺带扫描下载目录这一层：新视频补进库，子文件夹里的不进。"""
+        fresh = self.videos / "fresh.mp4"
+        fresh.write_bytes(b"\x00" * 64)
+        nested_dir = self.videos / "author"
+        nested_dir.mkdir()
+        (nested_dir / "nested.mp4").write_bytes(b"\x00" * 64)
+
+        self.page.ctx.config.set("download_path", str(self.videos))
+        self.page.refresh_files()
+        self.wait(lambda: "检查完成" in self.page.status.text())
+
+        names = self.names()
+        self.assertIn("fresh.mp4", names, "下载目录这一层的新视频应被收录")
+        self.assertNotIn("nested.mp4", names, "子文件夹里的视频不应入库")
+        self.assertIn("新收录 1 个视频", self.page.status.text())
+
     def test_open_missing_card_cleans_record(self):
         """点开源文件已消失的卡片：顺手把记录清掉，不留死条目。"""
         ghost = self.videos / "ghost.mp4"
