@@ -60,7 +60,11 @@ def _junction(path):
 
 
 def scan_videos(folder):
-    """递归收集视频文件；不跟随目录链接，按相对路径自然排序。"""
+    """收集文件夹这一层的视频文件，不进子目录。
+
+    批量下载会按作者在下载目录下新建子文件夹，那些视频不属于本级视频库，
+    所以这里只认直接位于 folder 下的文件，按文件名自然排序。
+    """
     folder = os.path.abspath(folder)
     if not os.path.isdir(folder):
         raise FileNotFoundError(f"文件夹不存在：{folder}")
@@ -69,11 +73,16 @@ def scan_videos(folder):
     def fail(error):
         raise error  # Never silently replace a scan with a partial result.
 
-    for root, dirs, files in os.walk(folder, onerror=fail, followlinks=False):
-        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))
-                   and not _junction(os.path.join(root, d))]
-        videos.extend(os.path.join(root, f) for f in files if is_video(f))
-    return sorted(videos, key=lambda p: natural_key(os.path.relpath(p, folder)))
+    with os.scandir(folder) as entries:
+        for entry in entries:
+            try:
+                is_file = entry.is_file()
+            except OSError as error:
+                fail(error)
+                continue
+            if is_file and is_video(entry.name):
+                videos.append(entry.path)
+    return sorted(videos, key=lambda p: natural_key(os.path.basename(p)))
 
 
 def fmt_time(ms):

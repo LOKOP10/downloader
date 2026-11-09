@@ -235,7 +235,7 @@ class VideoInterface(QWidget):
         self.moreBtn.setToolTip("重新加载库、清理失效记录等")
         self.moreBtn.clicked.connect(self._more_menu)
         self.folderBtn = PushButton(FIF.FOLDER, "导入文件夹", self)
-        self.folderBtn.setToolTip("递归扫描文件夹里的全部视频并入库")
+        self.folderBtn.setToolTip("只扫描所选文件夹这一层的视频并入库，不进子文件夹")
         self.folderBtn.clicked.connect(self._choose_folder)
         self.addBtn = PrimaryPushButton(FIF.ADD, "添加视频", self)
         self.addBtn.setToolTip("选择一个或多个视频文件加入视频库")
@@ -377,7 +377,7 @@ class VideoInterface(QWidget):
 
     def _choose_folder(self):
         path = QFileDialog.getExistingDirectory(
-            self, "选择视频文件夹（递归扫描全部子目录）", self.ctx.config.get("download_path"))
+            self, "选择视频文件夹（只扫描这一层，不进子文件夹）", self.ctx.config.get("download_path"))
         if path:
             self.import_paths([path])
 
@@ -790,7 +790,7 @@ class VideoInterface(QWidget):
         menu.addAction("重新加载已保存记录（放弃未保存修改）", self.reload_library)
         menu.addAction("使用说明", lambda: QMessageBox.information(
             self, "本地视频播放", "添加视频：选择一个或多个视频文件。\n"
-            "导入文件夹：递归扫描子目录里的全部视频。\n"
+            "导入文件夹：只扫描所选文件夹这一层的视频，不进子目录（批量下载的子文件夹不会导入）。\n"
             "双击卡片播放 / 继续播放（单击只选中，不会误开播放器）；\n"
             "鼠标移到卡片上，右上角出现 × 可直接删除。\n"
             "右键菜单还能「复制视频到剪贴板」（粘到文件夹里是复制文件，粘到输入框里是路径），\n"

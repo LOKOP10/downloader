@@ -94,7 +94,8 @@ class VideoLibraryTest(unittest.TestCase):
             (self.root / name).write_bytes(b"x")
         (self.root / "sub" / "2.webm").write_bytes(b"x")
         got = [Path(p).name for p in scan_videos(self.root)]
-        self.assertEqual(sorted(got), ["1.mp4", "2.webm", "b.mkv"])
+        # 只扫顶层：sub/2.webm 属于子文件夹，不应被收集
+        self.assertEqual(sorted(got), ["1.mp4", "b.mkv"])
         with self.assertRaises(FileNotFoundError):
             scan_videos(self.root / "missing")
 
