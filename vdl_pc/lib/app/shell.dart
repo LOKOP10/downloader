@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/app_state.dart';
 import '../design/motion.dart';
 import '../design/palette.dart';
 import 'sections.dart';
@@ -244,11 +245,25 @@ class _StatusBar extends StatelessWidget {
         border: Border(top: BorderSide(color: Palette.border)),
       ),
       child: Row(
-        children: const <Widget>[
-          Text('空闲', style: TextStyle(fontSize: 11.5, color: Palette.textDim)),
-          Spacer(),
+        children: <Widget>[
+          Text('空闲',
+              style: const TextStyle(fontSize: 11.5, color: Palette.textDim)),
+          const SizedBox(width: Space.lg),
+          Icon(
+            AppState.cookies.ok ? Icons.key : Icons.key_off,
+            size: 12,
+            color: AppState.cookies.ok ? Palette.success : Palette.textFaint,
+          ),
+          const SizedBox(width: Space.xs),
+          Text(
+            AppState.cookies.ok
+                ? '登录态：${AppState.cookies.loaded.length} 个站点'
+                : '登录态：未载入',
+            style: const TextStyle(fontSize: 11.5, color: Palette.textDim),
+          ),
+          const Spacer(),
           Text('保存到 movie · v1.8.19.4',
-              style: TextStyle(fontSize: 11.5, color: Palette.textDim)),
+              style: const TextStyle(fontSize: 11.5, color: Palette.textDim)),
         ],
       ),
     );
