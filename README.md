@@ -1,13 +1,14 @@
 # 视频下载器
 
 个人自用的多站点视频 / 图片下载工具。Windows 桌面端与 Android 端各一套实现，
-解析与下载链路完全独立，只共用「怎么做」的思路。
+解析与下载链路完全独立，只共用「怎么做」的思路；另有 `vdl_pc/`（Flutter
+桌面版）在建，解析与下载主链路已接入，界面只通了「视频解析」「下载任务」两页。
 
 仅供个人学习与备份使用。
 
 ## 架构
 
-两端都是「界面 → 核心 → 基础设施」三层，**站点差异全部收敛在解析器里**。
+三个工程都是「界面 → 核心 → 基础设施」三层，**站点差异全部收敛在解析器里**。
 
 ```
 桌面端                                     安卓端
@@ -55,11 +56,27 @@
 
 数据流：链接 → 识别 → 解析 → 下载（分段 / HLS / DASH）→ 原生合成 → 登记进媒体库。
 
+### PC 端（Flutter 桌面，在建）
+
+| 层 | 位置 | 职责 |
+|---|---|---|
+| 壳层 | `lib/app/` | 左侧九页导航 + 内容画布 + 底部状态条，页面顺序与 Python 桌面端一致 |
+| 界面 | `lib/features/`、`lib/design/` | 已实现「视频解析」「下载任务」两页，其余七页是带待办清单的占位页 |
+| 解析 | `lib/core/parse/` | 抖音 / 小红书 / B 站 / X / Pornhub / hanime1 六个解析器，统一在 `parser_registry.dart` 登记 |
+| 下载 | `lib/core/download/` | 多连接分段、HLS 分片、封装合成、任务持久化 |
+| 共享 | `lib/core/shared/` | 站点枚举、链接识别、HTTP 与代理、媒体落盘 |
+| 平台 | `windows/`、`lib/core/ffmpeg.dart`、`lib/core/cookie_bridge.dart` | Windows runner、ffmpeg 定位（`VDL_FFMPEG` → 程序目录 `tools` → PATH）、复用原桌面端 `config.json` 的 Cookie |
+
+数据流：粘贴链接 → 识别站点 → 解析出画质 → 分段下载 → ffmpeg 合成 → 落盘。
+
+现状：只有解析页与任务页能走通；批量下载、漫画阅读器、本地视频、WebP 转 MP4、
+MP4 转 GIF、导出原始帧、设置七页还是占位。
+
 ### 共同约定
 
 - **加一个站点 = 加一个解析器 + 在站点表登记**，其它层不用动。
 - 解析与下载解耦：解析层只产出媒体信息与直链，下载层只认地址列表。
-- 两端不共享代码：改一个站点要两端分别改。
+- 各端不共享代码：改一个站点要各端分别改。
 - 功能引擎各自独立，界面层不直接处理字节流。
 
 ## 目录结构
@@ -79,6 +96,11 @@
 │   ├── lib/shared/        # 站点枚举、链接识别、HTTP
 │   ├── test/              # 离线单测与组件测试
 │   └── android/           # 安卓工程与原生桥
+├── vdl_pc/                # PC 端（Flutter 桌面，在建）
+│   ├── lib/core/          # 解析 / 下载 / 封装合成 / 共享
+│   ├── lib/features/      # 解析页、任务页（其余七页为占位）
+│   ├── lib/design/        # 配色、动效、通用组件
+│   └── windows/           # Windows 原生 runner
 ├── docs/                  # 补充文档（见文末索引）
 ├── release-notes/         # 各版本发布说明
 └── website/               # 静态下载页
@@ -118,6 +140,19 @@ flutter build apk --release    # 产物 build/app/outputs/flutter-apk/app-releas
 flutter test                   # 离线单测与组件测试
 ```
 
+### PC 端（Flutter 桌面）
+
+环境：Flutter 3.47+（Dart 3.13+）、Visual Studio 2022 的「使用 C++ 的桌面开发」工作负载。
+
+```bash
+cd vdl_pc
+flutter pub get
+flutter run -d windows           # 调试运行
+flutter build windows --release  # 产物 build/windows/x64/runner/Release/
+```
+
+现状只通了「视频解析」与「下载任务」两页，其余页面是带待办清单的占位。
+
 ### 从 clone 到能跑
 
 仓库只提交源码，**克隆下来不能直接运行**，以下都要自己准备：
@@ -125,7 +160,7 @@ flutter test                   # 离线单测与组件测试
 | 需要什么 | 怎么来 |
 |---|---|
 | Python 依赖 | `pip install -r requirements.txt` |
-| Flutter 依赖 | `flutter pub get` |
+| Flutter 依赖 | `flutter pub get`（`flutter_app/` 与 `vdl_pc/` 各跑一次） |
 | ffmpeg（B 站 / YouTube 音视频合并、GIF 转换） | 桌面端在「设置 → 合并组件」里下载，不是 pip 依赖 |
 | 本机 Edge | 桌面端取 Cookie 用，需系统已安装 |
 | 各站点登录态 | 设置页填 Cookie，或用内置登录流程导入 |
@@ -147,6 +182,9 @@ flutter test                   # 离线单测与组件测试
 | hanime1 | 需 TLS 指纹，免登录 | 两端 ✅ |
 | 禁漫天堂 | 种子号解析；安卓另有整本下载 + 书架 | 两端 ✅ |
 
+PC 端（在建）已接通抖音、小红书、B 站、X、Pornhub、hanime1 六个解析器；禁漫只在站点表里
+预留，整本下载与书架还没做。
+
 ## 能力对照
 
 | 能力 | 桌面端 | 安卓端 |
@@ -167,6 +205,7 @@ flutter test                   # 离线单测与组件测试
 | [`docs/desktop-features.md`](docs/desktop-features.md) | 桌面端完整功能说明（视频库、转换工具、漫画阅读器） |
 | [`docs/configuration.md`](docs/configuration.md) | 配置项逐条说明与运行注意事项 |
 | [`flutter_app/README.md`](flutter_app/README.md) | 安卓端实现细节与踩坑记录 |
+| [`vdl_pc/README.md`](vdl_pc/README.md) | PC 端（Flutter 桌面）现状、目录与跑法 |
 
 ## 第三方代码与许可
 

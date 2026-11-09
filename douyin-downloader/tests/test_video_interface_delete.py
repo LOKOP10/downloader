@@ -98,17 +98,40 @@ class VideoInterfaceDeleteTest(unittest.TestCase):
         self.assertIn("已自动清理 1 条失效记录", self.page.status.text())
 
     def test_check_files_prunes_new_missing_record(self):
-        """「检查文件」：后来被删掉的记录同样会被清掉，并说明清了几条。"""
+        """「检查文件」：清掉源文件已删的记录，并说明清了几条。
+
+        顺带把「不在下载目录这一层」的记录移出：本用例把下载目录指向 videos/，
+        于是外置盘那条（root/unplugged/gone.mp4）属于越界记录。
+        """
         ghost = self.videos / "ghost.mp4"
         self.page.library.add(str(ghost), "事后被删的视频")
         self.page.library.save()
         self.page.refresh_shelf()
         self.assertEqual(self.page.shelf.count(), 3)
 
+        self.page.ctx.config.set("download_path", str(self.videos))
         self.page.refresh_files()
         self.wait(lambda: "检查完成" in self.page.status.text())
-        self.assertEqual(self.names(), ["alive.mp4", "gone.mp4"])
+        self.assertEqual(self.names(), ["alive.mp4"])
         self.assertIn("已清理 1 条失效记录", self.page.status.text())
+        self.assertIn("移出 1 个不在下载目录这一层的记录", self.page.status.text())
+
+    def test_check_files_scans_download_folder(self):
+        """「检查文件」顺带扫描下载目录这一层：新视频补进库，子文件夹里的不进。"""
+        fresh = self.videos / "fresh.mp4"
+        fresh.write_bytes(b"\x00" * 64)
+        nested_dir = self.videos / "author"
+        nested_dir.mkdir()
+        (nested_dir / "nested.mp4").write_bytes(b"\x00" * 64)
+
+        self.page.ctx.config.set("download_path", str(self.videos))
+        self.page.refresh_files()
+        self.wait(lambda: "检查完成" in self.page.status.text())
+
+        names = self.names()
+        self.assertIn("fresh.mp4", names, "下载目录这一层的新视频应被收录")
+        self.assertNotIn("nested.mp4", names, "子文件夹里的视频不应入库")
+        self.assertIn("新收录 1 个视频", self.page.status.text())
 
     def test_open_missing_card_cleans_record(self):
         """点开源文件已消失的卡片：顺手把记录清掉，不留死条目。"""

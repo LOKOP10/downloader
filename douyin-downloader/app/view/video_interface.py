@@ -228,14 +228,15 @@ class VideoInterface(QWidget):
         header.addWidget(self.heading, 1)
         self.refreshBtn = PushButton(FIF.SYNC, "检查文件", self)
         self.refreshBtn.setToolTip(
-            "核对每个视频的源文件是否还在：已被删除的记录自动清理，缺封面的补上。\n"
+            "扫描下载目录这一层，把新出现的视频补进库（不进子文件夹）；"
+            "同时核对已有记录：已被删除的自动清理，缺封面的补上。\n"
             "外置盘 / 网络盘暂时没连上时只提示，不会清掉记录。")
         self.refreshBtn.clicked.connect(self.refresh_files)
         self.moreBtn = PushButton(FIF.MORE, "更多", self)
         self.moreBtn.setToolTip("重新加载库、清理失效记录等")
         self.moreBtn.clicked.connect(self._more_menu)
         self.folderBtn = PushButton(FIF.FOLDER, "导入文件夹", self)
-        self.folderBtn.setToolTip("递归扫描文件夹里的全部视频并入库")
+        self.folderBtn.setToolTip("只扫描所选文件夹这一层的视频并入库，不进子文件夹")
         self.folderBtn.clicked.connect(self._choose_folder)
         self.addBtn = PrimaryPushButton(FIF.ADD, "添加视频", self)
         self.addBtn.setToolTip("选择一个或多个视频文件加入视频库")
@@ -320,6 +321,12 @@ class VideoInterface(QWidget):
         path = info.save_path
         if not path or not is_video_file_entry(path, info.name):
             return
+        # 只收下载目录这一层的成品：批量下载会按作者新建子文件夹，那些视频
+        # 不属于本级视频库，不入库（与 scan_videos 的口径保持一致）。
+        root_dir = (self.ctx.config.get("download_path") or "").strip()
+        if root_dir and os.path.dirname(os.path.abspath(path)) != os.path.abspath(root_dir):
+            log.info("跳过自动入库（不在下载目录顶层）：%s", path)
+            return
         key = folder_key(path)
         if key not in self._auto_add_keys:
             self._auto_add_keys.add(key)
@@ -377,7 +384,7 @@ class VideoInterface(QWidget):
 
     def _choose_folder(self):
         path = QFileDialog.getExistingDirectory(
-            self, "选择视频文件夹（递归扫描全部子目录）", self.ctx.config.get("download_path"))
+            self, "选择视频文件夹（只扫描这一层，不进子文件夹）", self.ctx.config.get("download_path"))
         if path:
             self.import_paths([path])
 
@@ -536,8 +543,9 @@ class VideoInterface(QWidget):
 
     # ------------------------------------------------------------------ 维护
     def refresh_files(self):
-        """「检查文件」：核对源文件，已删除的记录直接清掉，缺封面的补上。
+        """「检查文件」：先扫下载目录这一层补入新视频，再核对已有记录。
 
+        扫描只认下载目录这一层（父文件夹），批量下载建的作者子文件夹不进。
         判定分三档，避免把「暂时看不到」当成「已经删了」：
           文件还在          → 保留；
           文件没了、目录还在 → 确实被删，移除记录（卡片随之消失）；
@@ -546,16 +554,34 @@ class VideoInterface(QWidget):
         if self._busy or self._closed:
             return
         items = list(self.library.videos)
-        if not items:
-            self.status.setText("视频库是空的：没有需要检查的记录")
-            return
+        # 注意：库为空也要继续往下走 —— 这时「检查文件」等于「扫描下载目录导入」。
         self._set_busy(True)
         self.status.setText("正在检查视频文件…")
         ffmpeg, covers_dir = self._ffmpeg, self._covers_dir
 
         def scan():
+            # 先扫一遍下载目录这一层：父文件夹里新出现的视频直接补进库。
+            # 只认这一层，批量下载建的作者子文件夹不进（与导入、自动入库口径一致）。
+            fresh = []
+            root_dir = (self.ctx.config.get("download_path") or "").strip()
+            if root_dir and os.path.isdir(root_dir):
+                known = {folder_key(item.path) for item in items}
+                for found_path in scan_videos(root_dir):
+                    if folder_key(found_path) in known:
+                        continue
+                    cover_shot = (find_downloaded_cover(found_path)
+                                  or extract_first_frame(found_path, ffmpeg, covers_dir))
+                    fresh.append((found_path, cover_shot))
             results = []
+            strict_root = os.path.abspath(root_dir) if root_dir else ""
             for item in items:
+                # 严格口径：只有直接放在下载目录这一层的视频才属于本级视频库。
+                # 子文件夹（批量下载按作者建的）与手动添加到别处的记录一并移出；
+                # 只动记录、不碰文件；未配置下载目录时不排除，免得误清空。
+                if (strict_root
+                        and os.path.dirname(os.path.abspath(item.path)) != strict_root):
+                    results.append((item, "outscope", ""))
+                    continue
                 if os.path.isfile(item.path) and is_video(item.path):
                     cover = ""
                     if not item.cover:
@@ -567,16 +593,24 @@ class VideoInterface(QWidget):
                     results.append((item, "gone", ""))
                 else:
                     results.append((item, "offline", ""))
-            return results
+            return results, fresh
 
-        def done(results, error):
+        def done(payload, error):
             self._set_busy(False)
             if self._closed:
                 return
             if error:
                 self.status.setText(f"检查失败：{error}")
                 return
-            gone = [item for item, state, _ in results if state == "gone"]
+            results, fresh = payload
+            added = 0
+            for found_path, cover_shot in fresh:
+                item = self.library.add(found_path, "")
+                if cover_shot and not item.cover:
+                    item.cover = cover_shot
+                added += 1
+            gone = [item for item, state, _ in results if state in ("gone", "outscope")]
+            outscope = sum(1 for _, state, _ in results if state == "outscope")
             offline = sum(1 for _, state, _ in results if state == "offline")
             filled = 0
             for item, state, cover in results:
@@ -585,23 +619,30 @@ class VideoInterface(QWidget):
                     filled += 1
             for item in gone:
                 self.library.remove(item)
-            saved = self._save() if (gone or filled) else True
+            saved = self._save() if (gone or filled or added) else True
             if gone:
                 # 卡片集合变了，丢掉旧的封面解码代次，避免回填到已移除的条目
                 self._cover_generation += 1
             self.refresh_shelf()
-            self.status.setText(self._check_summary(len(items), gone, offline, filled, saved))
+            self.status.setText(
+                self._check_summary(
+                    len(items), gone, offline, filled, saved, added, outscope))
 
         self.jobs.start(scan, done)
 
     @staticmethod
-    def _check_summary(total, gone, offline, filled, saved):
-        """「检查文件」结果的一句话结论：先说清理了什么，再说保留了哪些。"""
+    def _check_summary(total, gone, offline, filled, saved, added=0, outscope=0):
+        """「检查文件」结果的一句话结论：先说新增与清理，再说保留了哪些。"""
         if not saved:
             return "视频记录保存失败，本次检查未落盘；请「更多 → 重新加载」后再试。"
         parts = []
-        if gone:
-            parts.append(f"已清理 {len(gone)} 条失效记录（源文件已不存在）")
+        if added:
+            parts.append(f"新收录 {added} 个视频")
+        stale = len(gone) - outscope
+        if outscope:
+            parts.append(f"移出 {outscope} 个不在下载目录这一层的记录")
+        if stale:
+            parts.append(f"已清理 {stale} 条失效记录（源文件已不存在）")
         if offline:
             parts.append(f"{offline} 个视频所在目录暂时访问不到，记录已保留")
         if filled:
@@ -790,7 +831,7 @@ class VideoInterface(QWidget):
         menu.addAction("重新加载已保存记录（放弃未保存修改）", self.reload_library)
         menu.addAction("使用说明", lambda: QMessageBox.information(
             self, "本地视频播放", "添加视频：选择一个或多个视频文件。\n"
-            "导入文件夹：递归扫描子目录里的全部视频。\n"
+            "导入文件夹：只扫描所选文件夹这一层的视频，不进子目录（批量下载的子文件夹不会导入）。\n"
             "双击卡片播放 / 继续播放（单击只选中，不会误开播放器）；\n"
             "鼠标移到卡片上，右上角出现 × 可直接删除。\n"
             "右键菜单还能「复制视频到剪贴板」（粘到文件夹里是复制文件，粘到输入框里是路径），\n"
