@@ -320,6 +320,12 @@ class VideoInterface(QWidget):
         path = info.save_path
         if not path or not is_video_file_entry(path, info.name):
             return
+        # 只收下载目录这一层的成品：批量下载会按作者新建子文件夹，那些视频
+        # 不属于本级视频库，不入库（与 scan_videos 的口径保持一致）。
+        root_dir = (self.ctx.config.get("download_path") or "").strip()
+        if root_dir and os.path.dirname(os.path.abspath(path)) != os.path.abspath(root_dir):
+            log.info("跳过自动入库（不在下载目录顶层）：%s", path)
+            return
         key = folder_key(path)
         if key not in self._auto_add_keys:
             self._auto_add_keys.add(key)
