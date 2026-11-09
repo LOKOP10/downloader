@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
 import 'app/shell.dart';
+import 'core/app_state.dart';
 import 'design/theme.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await AppState.init();
   runApp(const VdlApp());
 }
 

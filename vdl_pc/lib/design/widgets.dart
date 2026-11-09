@@ -17,13 +17,14 @@ class PageHeading extends StatelessWidget {
         Text(title,
             style: const TextStyle(
               fontSize: 22,
+              letterSpacing: 0.2,
               fontWeight: FontWeight.w600,
               color: Palette.text,
             )),
         if (subtitle != null) ...<Widget>[
           const SizedBox(height: Space.xs),
           Text(subtitle!,
-              style: const TextStyle(fontSize: 13, color: Palette.textDim)),
+              style: const TextStyle(fontSize: 12.5, height: 1.5, color: Palette.textDim)),
         ],
       ],
     );

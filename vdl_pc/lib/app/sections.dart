@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../features/parse/page.dart';
 import '../features/placeholder.dart';
+import '../features/tasks/page.dart';
 
 /// 一个导航项：图标 + 标题 + 构建内容的回调。
 class Section {
@@ -75,15 +77,7 @@ const List<Section> kSections = <Section>[
   ),
 ];
 
-Widget _parse(BuildContext c) => const PlaceholderPage(
-      title: '视频解析',
-      subtitle: '粘贴分享链接或分享文案，选画质，下载。解析结果显示在下方，不用切页。',
-      todo: <String>[
-        '链接识别与站点路由（9 个站点）',
-        '解析结果画质列表与下载按钮',
-        '抖音 / B站 / 小红书 / X / Instagram / YouTube / Pornhub / hanime1 / 禁漫',
-      ],
-    );
+Widget _parse(BuildContext c) => const ParsePage();
 
 Widget _batch(BuildContext c) => const PlaceholderPage(
       title: '批量下载',
@@ -91,11 +85,7 @@ Widget _batch(BuildContext c) => const PlaceholderPage(
       todo: <String>['主页作品列表抓取与分页', '勾选、全选与画质批量设置', '进入下载队列'],
     );
 
-Widget _tasks(BuildContext c) => const PlaceholderPage(
-      title: '下载任务',
-      subtitle: '进行中与已完成的任务，支持暂停、取消与打开所在文件夹。',
-      todo: <String>['任务队列与并发控制', '分段下载进度与速度显示', '完成后自动入库与复制到剪贴板'],
-    );
+Widget _tasks(BuildContext c) => const TasksPage();
 
 Widget _manga(BuildContext c) => const PlaceholderPage(
       title: '漫画阅读器',

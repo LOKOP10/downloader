@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../design/motion.dart';
 import '../design/palette.dart';
 import 'sections.dart';
 
@@ -24,14 +25,15 @@ class _ShellState extends State<Shell> {
               children: <Widget>[
                 _Sidebar(
                   index: _index,
-                  onSelect: (int i) => setState(() => _index = i),
+                  onSelect: (int i) {
+                    if (i != _index) setState(() => _index = i);
+                  },
                 ),
                 const VerticalDivider(width: 1, thickness: 1),
                 Expanded(
                   child: ColoredBox(
                     color: Palette.bg,
-                    // IndexedStack 保留各页滚动位置与输入内容，切页不丢状态。
-                    child: IndexedStack(
+                    child: _AnimatedPages(
                       index: _index,
                       children: kSections
                           .map((Section s) => Builder(builder: s.builder))
@@ -45,6 +47,58 @@ class _ShellState extends State<Shell> {
           const _StatusBar(),
         ],
       ),
+    );
+  }
+}
+
+/// 带动画的 IndexedStack：切页时淡入上移，但不重建子树，各页状态与滚动位置都保留。
+class _AnimatedPages extends StatefulWidget {
+  const _AnimatedPages({required this.index, required this.children});
+
+  final int index;
+  final List<Widget> children;
+
+  @override
+  State<_AnimatedPages> createState() => _AnimatedPagesState();
+}
+
+class _AnimatedPagesState extends State<_AnimatedPages>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: Motion.normal,
+    value: 1,
+  );
+
+  @override
+  void didUpdateWidget(_AnimatedPages oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.index != widget.index) {
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (BuildContext context, Widget? child) {
+        final double t = Motion.curve.transform(_controller.value);
+        return Opacity(
+          opacity: t,
+          child: Transform.translate(
+            offset: Offset(0, (1 - t) * 12),
+            child: child,
+          ),
+        );
+      },
+      child: IndexedStack(index: widget.index, children: widget.children),
     );
   }
 }
@@ -84,51 +138,94 @@ class _Sidebar extends StatelessWidget {
             child: ListView.builder(
               padding: const EdgeInsets.symmetric(horizontal: Space.sm),
               itemCount: kSections.length,
-              itemBuilder: (BuildContext context, int i) {
-                final Section s = kSections[i];
-                final bool active = i == index;
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 2),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(Space.sm),
-                      onTap: () => onSelect(i),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: Space.md, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: active ? Palette.surfaceHover : null,
-                          borderRadius: BorderRadius.circular(Space.sm),
-                        ),
-                        child: Row(
-                          children: <Widget>[
-                            Icon(s.icon,
-                                size: 18,
-                                color: active
-                                    ? Palette.accent
-                                    : Palette.textDim),
-                            const SizedBox(width: Space.md),
-                            Text(s.title,
-                                style: TextStyle(
-                                  fontSize: 13.5,
-                                  color: active
-                                      ? Palette.text
-                                      : Palette.textDim,
-                                  fontWeight: active
-                                      ? FontWeight.w600
-                                      : FontWeight.w400,
-                                )),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
+              itemBuilder: (BuildContext context, int i) => _NavItem(
+                section: kSections[i],
+                active: i == index,
+                onTap: () => onSelect(i),
+              ),
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 单个导航项：悬停微亮，选中时背景、图标与文字颜色平滑过渡。
+class _NavItem extends StatefulWidget {
+  const _NavItem({
+    required this.section,
+    required this.active,
+    required this.onTap,
+  });
+
+  final Section section;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  State<_NavItem> createState() => _NavItemState();
+}
+
+class _NavItemState extends State<_NavItem> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool active = widget.active;
+    final Color bg = active
+        ? Palette.surfaceHover
+        : (_hover ? Palette.surface : Colors.transparent);
+    final Color fg = active || _hover ? Palette.text : Palette.textDim;
+    final Color iconColor = active ? Palette.accent : fg;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedContainer(
+            duration: Motion.fast,
+            curve: Motion.curve,
+            padding: const EdgeInsets.symmetric(
+                horizontal: Space.md, vertical: 10),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(Space.sm),
+            ),
+            child: Row(
+              children: <Widget>[
+                AnimatedSwitcher(
+                  duration: Motion.fast,
+                  child: Icon(
+                    widget.section.icon,
+                    key: ValueKey<String>('$iconColor'),
+                    size: 18,
+                    color: iconColor,
+                  ),
+                ),
+                const SizedBox(width: Space.md),
+                Expanded(
+                  child: AnimatedDefaultTextStyle(
+                    duration: Motion.fast,
+                    curve: Motion.curve,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      color: fg,
+                      fontWeight:
+                          active ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                    child: Text(widget.section.title),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
