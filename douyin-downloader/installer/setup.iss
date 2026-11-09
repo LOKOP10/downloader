@@ -3,7 +3,7 @@
 ; 产物：dist\视频下载器-<version>-setup.exe
 
 #define MyAppName "视频下载器"
-#define MyAppVersion "1.8.19.3"
+#define MyAppVersion "1.8.19.4"
 #define MyAppPublisher "个人项目"
 #define MyAppExeName "视频下载器.exe"
 ; 测试安装可用编译参数指定独立AppId，避免碰用户现有安装/卸载注册信息。
