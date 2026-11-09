@@ -5,7 +5,6 @@ import '../../core/app_state.dart';
 import '../../core/parse/media_info.dart';
 import '../../core/parse/parser_registry.dart';
 import '../../core/shared/links.dart';
-import '../../core/shared/site.dart';
 import '../../design/buttons.dart';
 import '../../design/motion.dart';
 import '../../design/palette.dart';
