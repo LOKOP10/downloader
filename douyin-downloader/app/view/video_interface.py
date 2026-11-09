@@ -573,7 +573,15 @@ class VideoInterface(QWidget):
                                   or extract_first_frame(found_path, ffmpeg, covers_dir))
                     fresh.append((found_path, cover_shot))
             results = []
+            strict_root = os.path.abspath(root_dir) if root_dir else ""
             for item in items:
+                # 严格口径：只有直接放在下载目录这一层的视频才属于本级视频库。
+                # 子文件夹（批量下载按作者建的）与手动添加到别处的记录一并移出；
+                # 只动记录、不碰文件；未配置下载目录时不排除，免得误清空。
+                if (strict_root
+                        and os.path.dirname(os.path.abspath(item.path)) != strict_root):
+                    results.append((item, "outscope", ""))
+                    continue
                 if os.path.isfile(item.path) and is_video(item.path):
                     cover = ""
                     if not item.cover:
@@ -601,7 +609,8 @@ class VideoInterface(QWidget):
                 if cover_shot and not item.cover:
                     item.cover = cover_shot
                 added += 1
-            gone = [item for item, state, _ in results if state == "gone"]
+            gone = [item for item, state, _ in results if state in ("gone", "outscope")]
+            outscope = sum(1 for _, state, _ in results if state == "outscope")
             offline = sum(1 for _, state, _ in results if state == "offline")
             filled = 0
             for item, state, cover in results:
@@ -616,20 +625,24 @@ class VideoInterface(QWidget):
                 self._cover_generation += 1
             self.refresh_shelf()
             self.status.setText(
-                self._check_summary(len(items), gone, offline, filled, saved, added))
+                self._check_summary(
+                    len(items), gone, offline, filled, saved, added, outscope))
 
         self.jobs.start(scan, done)
 
     @staticmethod
-    def _check_summary(total, gone, offline, filled, saved, added=0):
+    def _check_summary(total, gone, offline, filled, saved, added=0, outscope=0):
         """「检查文件」结果的一句话结论：先说新增与清理，再说保留了哪些。"""
         if not saved:
             return "视频记录保存失败，本次检查未落盘；请「更多 → 重新加载」后再试。"
         parts = []
         if added:
             parts.append(f"新收录 {added} 个视频")
-        if gone:
-            parts.append(f"已清理 {len(gone)} 条失效记录（源文件已不存在）")
+        stale = len(gone) - outscope
+        if outscope:
+            parts.append(f"移出 {outscope} 个不在下载目录这一层的记录")
+        if stale:
+            parts.append(f"已清理 {stale} 条失效记录（源文件已不存在）")
         if offline:
             parts.append(f"{offline} 个视频所在目录暂时访问不到，记录已保留")
         if filled:

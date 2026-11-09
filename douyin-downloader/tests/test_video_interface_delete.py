@@ -98,17 +98,23 @@ class VideoInterfaceDeleteTest(unittest.TestCase):
         self.assertIn("已自动清理 1 条失效记录", self.page.status.text())
 
     def test_check_files_prunes_new_missing_record(self):
-        """「检查文件」：后来被删掉的记录同样会被清掉，并说明清了几条。"""
+        """「检查文件」：清掉源文件已删的记录，并说明清了几条。
+
+        顺带把「不在下载目录这一层」的记录移出：本用例把下载目录指向 videos/，
+        于是外置盘那条（root/unplugged/gone.mp4）属于越界记录。
+        """
         ghost = self.videos / "ghost.mp4"
         self.page.library.add(str(ghost), "事后被删的视频")
         self.page.library.save()
         self.page.refresh_shelf()
         self.assertEqual(self.page.shelf.count(), 3)
 
+        self.page.ctx.config.set("download_path", str(self.videos))
         self.page.refresh_files()
         self.wait(lambda: "检查完成" in self.page.status.text())
-        self.assertEqual(self.names(), ["alive.mp4", "gone.mp4"])
+        self.assertEqual(self.names(), ["alive.mp4"])
         self.assertIn("已清理 1 条失效记录", self.page.status.text())
+        self.assertIn("移出 1 个不在下载目录这一层的记录", self.page.status.text())
 
     def test_check_files_scans_download_folder(self):
         """「检查文件」顺带扫描下载目录这一层：新视频补进库，子文件夹里的不进。"""
