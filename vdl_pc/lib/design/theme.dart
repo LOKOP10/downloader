@@ -32,6 +32,7 @@ ThemeData buildTheme() {
           fontSize: 13,
           height: 1.45,
           letterSpacing: 0.1,
+          fontWeight: FontWeight.w500,
           color: Palette.text,
         ),
         titleLarge: const TextStyle(

@@ -247,7 +247,7 @@ class _StatusBar extends StatelessWidget {
       child: Row(
         children: <Widget>[
           Text('空闲',
-              style: const TextStyle(fontSize: 11.5, color: Palette.textDim)),
+              style: const TextStyle(fontSize: 12, color: Palette.textDim)),
           const SizedBox(width: Space.lg),
           Icon(
             AppState.cookies.ok ? Icons.key : Icons.key_off,
@@ -259,11 +259,11 @@ class _StatusBar extends StatelessWidget {
             AppState.cookies.ok
                 ? '登录态：${AppState.cookies.loaded.length} 个站点'
                 : '登录态：未载入',
-            style: const TextStyle(fontSize: 11.5, color: Palette.textDim),
+            style: const TextStyle(fontSize: 12, color: Palette.textDim),
           ),
           const Spacer(),
           Text('保存到 movie · v1.8.19.4',
-              style: const TextStyle(fontSize: 11.5, color: Palette.textDim)),
+              style: const TextStyle(fontSize: 12, color: Palette.textDim)),
         ],
       ),
     );

@@ -126,7 +126,7 @@ class _JobCard extends StatelessWidget {
               ),
               const SizedBox(width: Space.sm),
               Text(stateText,
-                  style: TextStyle(fontSize: 11.5, color: stateColor)),
+                  style: TextStyle(fontSize: 12, color: stateColor)),
               const SizedBox(width: Space.md),
               if (job.status == TaskStatus.running)
                 GhostButton(
@@ -170,7 +170,7 @@ class _JobCard extends StatelessWidget {
                         ? '准备中…'
                         : _progressText(progress),
                     style: const TextStyle(
-                        fontSize: 11.5, color: Palette.textDim),
+                        fontSize: 12, color: Palette.textDim),
                   ),
                   const Spacer(),
                   if (job.savePath != null)
@@ -188,7 +188,7 @@ class _JobCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(job.error!,
                 style: const TextStyle(
-                    fontSize: 11.5, color: Palette.danger)),
+                    fontSize: 12, color: Palette.danger)),
           ],
         ],
       ),

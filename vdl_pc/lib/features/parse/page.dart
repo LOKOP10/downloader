@@ -169,7 +169,7 @@ class _ParsePageState extends State<ParsePage> {
                 const Text(
                   '抖音 · B站 · 小红书 · X · Pornhub · hanime1 · 禁漫',
                   style: TextStyle(
-                      fontSize: 11.5, color: Palette.textFaint),
+                      fontSize: 12, color: Palette.textFaint),
                 ),
               ],
             ),
@@ -270,7 +270,7 @@ class _ResultCard extends StatelessWidget {
                         if (info.durationText.isNotEmpty) info.durationText,
                       ].join(' · '),
                       style: const TextStyle(
-                          fontSize: 11.5, color: Palette.textDim),
+                          fontSize: 12, color: Palette.textDim),
                     ),
                   ],
                 ),
@@ -313,7 +313,7 @@ class _ResultCard extends StatelessWidget {
                             const SizedBox(width: Space.sm),
                             Text(_sizeText(q.sizeBytes),
                                 style: const TextStyle(
-                                    fontSize: 11.5,
+                                    fontSize: 12,
                                     color: Palette.textFaint)),
                           ],
                           const Spacer(),
