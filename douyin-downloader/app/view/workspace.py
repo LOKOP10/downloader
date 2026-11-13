@@ -23,7 +23,7 @@
 """
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import (QColor, QLinearGradient, QPainter, QPainterPath,
-                           QPen, QRadialGradient)
+                           QPen, QPixmap, QRadialGradient)
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QSizePolicy,
                                QVBoxLayout, QWidget)
 
@@ -148,6 +148,7 @@ class _Text(QLabel):
         self.setFont(D.font(size, weight))
         self.setWordWrap(wrap)
         self._apply()
+        on_theme(self, self._apply)
 
     def set_token(self, token) -> None:
         self._token = token
@@ -255,29 +256,47 @@ class IconBadge(QWidget):
         super().__init__(parent)
         self._icon = icon
         self._icon_size = icon_size
+        self._cache_key = None
+        self._cache = None
         self.setFixedSize(size, size)
         on_theme(self)
+        qconfig.themeColorChanged.connect(self._invalidate_cache)
+
+    def _invalidate_cache(self, *_):
+        self._cache_key = None
+        self.update()
 
     def set_icon(self, icon) -> None:
         self._icon = icon
-        self.update()
+        self._invalidate_cache()
 
     def paintEvent(self, event):
+        dpr = self.devicePixelRatioF()
+        key = (self.width(), self.height(), dpr, isDarkTheme(), accent().rgba())
+        if self._cache_key != key or self._cache is None:
+            # 图标与底板在滚动时不变，仅主题、强调色、图标或缩放变化时重画。
+            pixmap = QPixmap(round(self.width() * dpr), round(self.height() * dpr))
+            pixmap.setDevicePixelRatio(dpr)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            rect = QRectF(self.rect())
+            grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
+            grad.setColorAt(0.0, with_alpha(accent(), 64 if isDarkTheme() else 40))
+            grad.setColorAt(1.0, with_alpha(col(D.SURFACE_HI), 235))
+            painter.setPen(QPen(with_alpha(accent(), 70), 1))
+            painter.setBrush(grad)
+            painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5),
+                                    D.RADIUS_LG, D.RADIUS_LG)
+            side = self._icon_size
+            drawIcon(self._icon, painter,
+                     QRect((self.width() - side) // 2, (self.height() - side) // 2,
+                           side, side))
+            painter.end()
+            self._cache = pixmap
+            self._cache_key = key
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(self.rect())
-        # 图标底板：强调色 → 内层底的柔和对角渐变，让图标块看起来是"发光的小方块"
-        grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        grad.setColorAt(0.0, with_alpha(accent(), 64 if isDarkTheme() else 40))
-        grad.setColorAt(1.0, with_alpha(col(D.SURFACE_HI), 235))
-        painter.setPen(QPen(with_alpha(accent(), 70), 1))
-        painter.setBrush(grad)
-        painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5),
-                                D.RADIUS_LG, D.RADIUS_LG)
-        side = self._icon_size
-        drawIcon(self._icon, painter,
-                 QRect((self.width() - side) // 2, (self.height() - side) // 2,
-                       side, side))
+        painter.drawPixmap(0, 0, self._cache)
 
 
 class EmptyState(QWidget):
@@ -335,7 +354,40 @@ class SegmentedTabs(QWidget):
         self.setFixedHeight(height)
         self.setMinimumWidth(min_width * len(self._items))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(" / ".join(self._items))
+        if self._items:
+            self.setAccessibleDescription(f"当前选项：{self._items[0]}")
         on_theme(self)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.update()
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if not self._items or not self.isEnabled():
+            return super().keyPressEvent(event)
+        targets = {
+            Qt.Key.Key_Left: max(0, self._current - 1),
+            Qt.Key.Key_Right: min(len(self._items) - 1, self._current + 1),
+            Qt.Key.Key_Home: 0,
+            Qt.Key.Key_End: len(self._items) - 1,
+        }
+        if key in targets:
+            self.set_current(targets[key], emit=True)
+            event.accept()
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            if not event.isAutoRepeat():
+                self.changed.emit(self._current)
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
     def current(self) -> int:
         return self._current
@@ -343,13 +395,16 @@ class SegmentedTabs(QWidget):
     def set_current(self, index: int, emit: bool = False) -> None:
         if 0 <= index < len(self._items) and index != self._current:
             self._current = index
+            self.setAccessibleDescription(f"当前选项：{self._items[index]}")
             self.update()
             if emit:
                 self.changed.emit(index)
 
     def set_item_text(self, index: int, text: str) -> None:
-        if 0 <= index < len(self._items):
+        if 0 <= index < len(self._items) and self._items[index] != text:
             self._items[index] = text
+            if index == self._current:
+                self.setAccessibleDescription(f"当前选项：{text}")
             self.update()
 
     def mouseMoveEvent(self, event):
@@ -366,6 +421,7 @@ class SegmentedTabs(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             index = self._index_at(event.position().x(), event.position().y())
             if index >= 0:
+                self.setFocus(Qt.FocusReason.MouseFocusReason)
                 self.set_current(index, emit=True)
 
     def _index_at(self, x: float, y: float) -> int:
@@ -393,11 +449,20 @@ class SegmentedTabs(QWidget):
                 painter.setPen(col(D.TEXT_PRIMARY))
                 font = D.font(D.FONT_CAPTION, D.W_SEMI)
             else:
+                if i == self._hover:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(col(D.BG_HOVER))
+                    painter.drawRoundedRect(cell, D.RADIUS_SM, D.RADIUS_SM)
                 painter.setPen(col(D.TEXT_SECONDARY if i == self._hover
                                    else D.TEXT_TERTIARY))
                 font = D.font(D.FONT_CAPTION)
             painter.setFont(font)
             painter.drawText(cell, Qt.AlignmentFlag.AlignCenter, text)
+            if i == self._current and self.hasFocus():
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(accent(), 1.5))
+                painter.drawRoundedRect(cell.adjusted(0.75, 0.75, -0.75, -0.75),
+                                        D.RADIUS_SM, D.RADIUS_SM)
 
 
 class SettingRow(QWidget):
@@ -531,7 +596,26 @@ class RailTool(QWidget):
         self.setFixedHeight(30)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(text)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(text)
         on_theme(self)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.update()
+
+    def keyPressEvent(self, event):
+        if self.isEnabled() and event.key() in (
+                Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            if not event.isAutoRepeat():
+                self.clicked.emit()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
     def enterEvent(self, event):
         self._hover = True
@@ -542,22 +626,31 @@ class RailTool(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and \
+                self.rect().contains(event.position().toPoint()):
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
             self.clicked.emit()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(self.rect()).adjusted(0, 1, 0, -1)
+        rect = QRectF(self.rect()).adjusted(0.75, 1, -0.75, -1)
         if self._hover:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(col(D.BG_HOVER))
             painter.drawRoundedRect(rect, D.RADIUS_MD, D.RADIUS_MD)
-        drawIcon(self._icon, painter, QRect(12, (self.height() - 16) // 2, 16, 16))
-        painter.setPen(col(D.TEXT_TERTIARY))
-        painter.setFont(D.font(D.FONT_CAPTION))
-        painter.drawText(QRect(38, 0, max(0, self.width() - 44), self.height()),
-                         Qt.AlignmentFlag.AlignVCenter, self._text)
+        icon_only = self.width() <= self.height()
+        icon_x = (self.width() - 16) // 2 if icon_only else 12
+        drawIcon(self._icon, painter, QRect(icon_x, (self.height() - 16) // 2, 16, 16))
+        if not icon_only:
+            painter.setPen(col(D.TEXT_TERTIARY))
+            painter.setFont(D.font(D.FONT_CAPTION))
+            painter.drawText(QRect(38, 0, max(0, self.width() - 44), self.height()),
+                             Qt.AlignmentFlag.AlignVCenter, self._text)
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(accent(), 1.5))
+            painter.drawRoundedRect(rect, D.RADIUS_MD, D.RADIUS_MD)
 
 
 class RailDivider(QFrame):
@@ -586,9 +679,48 @@ class TopTab(QWidget):
         self.setFixedHeight(self.HEIGHT)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(hint or text)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(text)
+        self.setAccessibleDescription(hint or text)
+        self.setFont(D.font(D.FONT_BODY))
         fm = self.fontMetrics()
         self.setMinimumWidth(fm.horizontalAdvance(text) + 28)
         on_theme(self)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.update()
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if not self.isEnabled():
+            return super().keyPressEvent(event)
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            if not event.isAutoRepeat():
+                self.clicked.emit(self._index)
+            event.accept()
+            return
+        siblings = [item for item in getattr(self.parentWidget(), "items", ())
+                    if item.isEnabled()]
+        if self in siblings:
+            index = siblings.index(self)
+            targets = {
+                Qt.Key.Key_Left: (index - 1) % len(siblings),
+                Qt.Key.Key_Right: (index + 1) % len(siblings),
+                Qt.Key.Key_Home: 0,
+                Qt.Key.Key_End: len(siblings) - 1,
+            }
+            if key in targets:
+                target = siblings[targets[key]]
+                target.setFocus(Qt.FocusReason.TabFocusReason)
+                target.clicked.emit(target._index)
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def set_active(self, on: bool) -> None:
         if bool(on) != self._active:
@@ -612,6 +744,11 @@ class TopTab(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect()
+        surface = QRectF(rect).adjusted(3, 5, -3, -4)
+        if self._active or self._hover:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(col(D.BG_HOVER if self._hover else D.SURFACE_HI))
+            painter.drawRoundedRect(surface, D.RADIUS_SM, D.RADIUS_SM)
         color = col(D.TEXT_PRIMARY) if self._active else (
             col(D.TEXT_SECONDARY) if self._hover else col(D.TEXT_TERTIARY))
         painter.setPen(color)
@@ -624,6 +761,11 @@ class TopTab(QWidget):
             painter.drawRoundedRect(
                 QRectF(rect.left() + 14, rect.bottom() - 1.5,
                        rect.width() - 28, 2), 1, 1)
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(accent(), 1.5))
+            painter.drawRoundedRect(surface.adjusted(0.75, 0.75, -0.75, -0.75),
+                                    D.RADIUS_SM, D.RADIUS_SM)
 
 
 class TopBar(QWidget):

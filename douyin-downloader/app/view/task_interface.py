@@ -32,6 +32,7 @@ from qfluentwidgets import (FluentIcon as FIF, InfoBar, InfoBarPosition,
                             ScrollArea, TableWidget, TransparentToolButton)
 
 from ..core import applog
+from ..core.system_open import open_local_path
 from ..core.models import DownloadTaskInfo, fmt_size, fmt_speed, quality_html
 from . import design as D
 from . import workspace as W
@@ -75,7 +76,7 @@ _FILTERS = [
     ("全部", None),
     ("进行中", ("下载中", "等待中", "合并中", "转换中")),
     ("已完成", ("已完成",)),
-    ("失败", ("失败", "已取消")),
+    ("失败 / 取消", ("失败", "已取消")),
 ]
 
 log = get_logger("task")
@@ -106,9 +107,8 @@ class TaskInterface(ScrollArea):
         self._build_table()
         self._build_log_card()
 
-        # 日志面板：先回看最近若干行，之后按固定间隔轮询内存日志（见 applog.MemoryHandler）
-        self._log_seq, lines = applog.snapshot(LOG_START_LINES)
-        self._append_logs(lines)
+        # 先保留最近日志，展开面板时再构造文本，折叠时不更新 QTextDocument。
+        self._log_seq, self._log_backlog = applog.snapshot(LOG_START_LINES)
         self._log_timer = QTimer(self)
         self._log_timer.setInterval(LOG_POLL_MS)
         self._log_timer.timeout.connect(self._drain_logs)
@@ -136,7 +136,7 @@ class TaskInterface(ScrollArea):
         head.setSpacing(D.GAP_SM)
         self.heading = W.PageHeading(
             "下载任务",
-            "队列进度与失败重试都在这里；底部日志记录解析与下载的关键节点。",
+            "后台下载会持续运行，可随时取消任务或重试失败项。",
             self.view)
         head.addWidget(self.heading, 1)
         self.openBtn = PushButton(FIF.FOLDER, "打开目录", self.view)
@@ -144,7 +144,8 @@ class TaskInterface(ScrollArea):
         self.openBtn.clicked.connect(self._open_download_dir)
         self.retryFailedBtn = PushButton(FIF.SYNC, "重试失败", self.view)
         self.retryFailedBtn.clicked.connect(self._retry_failed)
-        self.clearBtn = PushButton(FIF.DELETE, "清空已完成", self.view)
+        self.clearBtn = PushButton(FIF.DELETE, "清空已结束", self.view)
+        self.clearBtn.setToolTip("清除已完成、失败和已取消的记录，保留下载文件")
         self.clearBtn.clicked.connect(self._clear_finished)
         head.addWidget(self.openBtn, 0, Qt.AlignBottom)
         head.addWidget(self.retryFailedBtn, 0, Qt.AlignBottom)
@@ -187,7 +188,7 @@ class TaskInterface(ScrollArea):
                   COL_STATUS):
             header.setSectionResizeMode(c, QHeaderView.Fixed)
             self.table.setColumnWidth(c, _COL_WIDTHS[c])
-        self.table.setMinimumHeight(360)
+        self.table.setMinimumHeight(240)
         self.table.setMinimumWidth(0)
         # 横向滚动条**按需显示**：固定列合计仍可能超过视口，最右的「状态」列
         # 会被挤出去；核心操作（操作列）固定在最左，不受影响。
@@ -255,25 +256,31 @@ class TaskInterface(ScrollArea):
         card.body.addWidget(self.logView)
         self.logCard = card
         self.vBox.addWidget(card)
+        self._log_expanded = True
+        self._toggle_log()
 
     def _toggle_log(self):
-        shown = not self.logView.isVisible()
+        shown = not self._log_expanded
+        self._log_expanded = shown
         self.logView.setVisible(shown)
         self.logHint.setVisible(shown)
         for btn in (self.copyLogBtn, self.clearLogBtn, self.openLogBtn):
             btn.setVisible(shown)
         self.toggleLogBtn.setIcon(FIF.UP if shown else FIF.DOWN)
         self.toggleLogBtn.setToolTip("收起日志面板" if shown else "展开日志面板")
+        self.toggleLogBtn.setAccessibleName("收起运行日志" if shown else "展开运行日志")
+        if shown:
+            self._drain_logs()
 
     # ------------------------------------------------------------------ #
     # 日志面板
     def _drain_logs(self):
-        if not self.isVisible():
-            return                      # 不在本页就不刷，别白白占 UI 线程
+        if not self.isVisible() or not self._log_expanded:
+            return                      # 页面隐藏或日志折叠时不构造文本
         seq, lines = applog.fetch_since(self._log_seq)
-        if not lines:
-            return
         self._log_seq = seq
+        lines = (self._log_backlog + lines)[-LOG_VIEW_LINES:]
+        self._log_backlog = []
         self._append_logs(lines)
 
     def _append_logs(self, lines):
@@ -284,14 +291,16 @@ class TaskInterface(ScrollArea):
         follow = bar.value() >= bar.maximum() - 4
         cursor = self.logView.textCursor()
         cursor.movePosition(QTextCursor.End)
+        cursor.beginEditBlock()
         for level, text in lines:
             fmt = QTextCharFormat()
             color = _LOG_COLORS.get(level)
             if color:
                 fmt.setForeground(QColor(color))
             cursor.insertText(text + "\n", fmt)
-        self.logView.setTextCursor(cursor)
+        cursor.endEditBlock()
         if follow:
+            self.logView.setTextCursor(cursor)
             bar.setValue(bar.maximum())
 
     def _copy_log(self):
@@ -304,6 +313,7 @@ class TaskInterface(ScrollArea):
 
     def _clear_log_view(self):
         self.logView.clear()
+        self._log_backlog = []
         applog.clear_memory()
         # 缓冲清空后序号还在递增：同步一次，免得把清掉之前的行又补回来
         self._log_seq, _ = applog.snapshot(0)
@@ -313,7 +323,7 @@ class TaskInterface(ScrollArea):
         if not path or not os.path.exists(path):
             self._toast("日志文件不存在", "程序目录不可写，日志没有启用", "warning")
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        self._open_path(path)
 
     # ------------------------------------------------------------------ #
     def _on_task_added(self, info: DownloadTaskInfo):
@@ -361,7 +371,7 @@ class TaskInterface(ScrollArea):
         openBtn = TransparentToolButton(FIF.FOLDER, actions)
         openBtn.setToolTip("打开所在文件夹")
         openBtn.clicked.connect(
-            lambda _, p=info.save_path: self._open_file_location(p))
+            lambda _, tid=info.task_id: self._open_task_location(tid))
         delBtn = TransparentToolButton(FIF.DELETE, actions)
         delBtn.setToolTip("删除下载的文件")
         delBtn.clicked.connect(
@@ -406,11 +416,15 @@ class TaskInterface(ScrollArea):
         self._throttle.push(info.task_id, info)
 
     def _apply_updates(self, batch):
-        """节流后的批量刷新（每 120ms 最多一次）"""
+        """合并进度更新；只有表格里的任务状态改变时才重算汇总。"""
+        status_changed = False
         for info in batch:
             row = self._rows.get(info.task_id)
             if row is None:
                 continue
+            name_item = self.table.item(row, COL_NAME)
+            if name_item:
+                name_item.setToolTip(info.save_path)
             size_item = self.table.item(row, COL_SIZE)
             if size_item:
                 # 逐张下载的站点（禁漫）把「张数」写进 downloaded/total
@@ -437,11 +451,13 @@ class TaskInterface(ScrollArea):
                 # 状态列只写状态本身（列只有 84px），错误原因放 tooltip + 摘要下方
                 text = info.status
                 if status_item.text() != text:
+                    status_changed = True
                     status_item.setText(text)
                     status_item.setToolTip(
                         f"失败原因：{info.error}" if info.error else info.status)
             self._apply_row_filter(row, info)
-        self._refresh_summary()
+        if status_changed:
+            self._refresh_summary()
 
     def _refresh_summary(self):
         """摘要 + 分段计数：任务状态变化时才重算，避免每次进度更新都全量遍历"""
@@ -464,27 +480,24 @@ class TaskInterface(ScrollArea):
         labels = [f"{name} {n}" for (name, _), n in zip(_FILTERS, counts)]
         for i, label in enumerate(labels):
             self.filterTabs.set_item_text(i, label)
-        self.filterTabs.setMinimumWidth(76 * len(labels))
-        done, running, failed = counts[2], counts[1], counts[3]
-        if not tasks:
-            text = "暂无任务"
-        else:
-            text = f"共 {count} 个任务"
-            self.heading.set_meta(
-                f"进行中 {running} · 已完成 {done} · 失败 {failed}"
-                "　｜　运行日志记录解析与下载的关键节点")
+        width = max(76, max(self.filterTabs.fontMetrics().horizontalAdvance(label)
+                            for label in labels) + 24)
+        self.filterTabs.setMinimumWidth(width * len(labels))
+        failed = sum(1 for task in tasks if task.status == "失败")
+        text = f"共 {count} 个任务" if tasks else "暂无任务"
         if self.summaryLabel.text() != text:
             self.summaryLabel.setText(text)
         self.retryFailedBtn.setEnabled(failed > 0)
-        self.clearBtn.setEnabled(done + failed > 0)
+        self.clearBtn.setEnabled(any(task.status in ("已完成", "失败", "已取消")
+                                     for task in tasks))
 
     def _on_filter_changed(self, index: int):
         self._filter = index
+        tasks = {task.task_id: task for task in self.ctx.manager.all_tasks()}
         for row in range(self.table.rowCount()):
             item = self.table.item(row, COL_NAME)
             tid = item.data(Qt.UserRole) if item is not None else None
-            info = next((t for t in self.ctx.manager.all_tasks()
-                         if t.task_id == tid), None)
+            info = tasks.get(tid)
             if info is not None:
                 self._apply_row_filter(row, info)
             else:
@@ -497,10 +510,24 @@ class TaskInterface(ScrollArea):
         if self.table.isRowHidden(row) != hidden:
             self.table.setRowHidden(row, hidden)
 
+    def _open_path(self, path: str):
+        try:
+            if not open_local_path(path, lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(path))):
+                self._toast("无法打开", f"系统未能打开：{path}", "error")
+        except OSError as error:
+            self._toast("无法打开", str(error), "error")
+
     def _open_download_dir(self):
         path = self.ctx.config.get("download_path")
-        os.makedirs(path, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        if not path:
+            self._toast("未设置下载目录", "请在设置中选择保存目录", "warning")
+            return
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError as error:
+            self._toast("无法打开目录", str(error), "error")
+            return
+        self._open_path(path)
 
     def _manga_task_folder(self, info):
         """仅图集可以整夹阅读；视频封面不能把整个下载根目录变成一本书。"""
@@ -540,6 +567,14 @@ class TaskInterface(ScrollArea):
                 return
         self.read_manga.emit(folder)
 
+    def _open_task_location(self, task_id: str):
+        info = next((task for task in self.ctx.manager.all_tasks()
+                     if task.task_id == task_id), None)
+        if info is None:
+            self._toast("任务已不存在", "这条任务记录已经被清除了", "warning")
+            return
+        self._open_file_location(info.save_path)
+
     def _open_file_location(self, path: str):
         """在资源管理器里定位文件；路径不存在时给出可操作提示而不是静默无反应。"""
         if not path:
@@ -554,7 +589,7 @@ class TaskInterface(ScrollArea):
             self._toast("目录不存在",
                         f"找不到：{target}\n文件可能已被移动或删除", "warning")
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(target))
+        self._open_path(target)
 
     @staticmethod
     def _related_files(path: str) -> list:
@@ -632,7 +667,7 @@ class TaskInterface(ScrollArea):
         fn = {"success": InfoBar.success, "error": InfoBar.error,
               "warning": InfoBar.warning}.get(kind, InfoBar.info)
         fn(title, content, orient=Qt.Horizontal, isClosable=True,
-           position=InfoBarPosition.TOP, duration=3000, parent=self)
+           position=InfoBarPosition.TOP, duration=3000, parent=self.window())
 
     def _clear_finished(self):
         count = len(self.ctx.manager.finished_tasks())

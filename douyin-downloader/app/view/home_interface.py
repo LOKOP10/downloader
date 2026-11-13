@@ -20,13 +20,17 @@
 import os
 
 from PySide6.QtCore import QMimeData, Qt, QTimer, QUrl
-from PySide6.QtGui import QGuiApplication, QPixmap
+from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import (QHBoxLayout, QSizePolicy, QStackedWidget,
                                QVBoxLayout, QWidget)
 from qfluentwidgets import (BodyLabel, ComboBox, FluentIcon as FIF,
                             IndeterminateProgressBar, InfoBar, InfoBarPosition,
                             LineEdit, PrimaryPushButton, PushButton, ScrollArea,
                             StrongBodyLabel, TransparentToolButton)
+
+from qfluentwidgets.common.config import qconfig
+from qfluentwidgets.common.icon import FluentIconBase
+from qfluentwidgets.common.style_sheet import setCustomStyleSheet
 
 from ..core.applog import get_logger
 from ..core.domain import needs_cookie_for_source
@@ -44,6 +48,35 @@ log = get_logger("home")
 # 页头再说一遍、按钮再说一遍就是三重复读（设计原则 3）。
 _PLATFORM_LINE = ("抖音 · B站 · 小红书 · X · Instagram · YouTube · Pornhub · hanime1 · 禁漫"
                   "　｜　视频 / 图集 / 漫画车号")
+
+
+class _PrimaryButton(PrimaryPushButton):
+    """按实际强调色选择文字和图标前景，兼容深色与浅色预设。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._apply_foreground()
+        W.on_theme(self, self._apply_foreground)
+        qconfig.themeColorChanged.connect(self._apply_foreground)
+
+    def _foreground(self):
+        color = W.accent()
+        channels = [color.redF(), color.greenF(), color.blueF()]
+        linear = [value / 12.92 if value <= 0.04045 else
+                  ((value + 0.055) / 1.055) ** 2.4 for value in channels]
+        luminance = sum(value * weight for value, weight in
+                        zip(linear, (0.2126, 0.7152, 0.0722)))
+        return QColor("#FFFFFF" if luminance < 0.179 else "#18181B")
+
+    def _apply_foreground(self, *_):
+        style = f"PrimaryPushButton{{color:{self._foreground().name()};}}"
+        setCustomStyleSheet(self, style, style)
+        self.update()
+
+    def _drawIcon(self, icon, painter, rect, state=QIcon.Off):
+        if isinstance(icon, FluentIconBase):
+            icon = icon.icon(color=self._foreground())
+        PushButton._drawIcon(self, icon, painter, rect, state)
 
 
 class HomeInterface(ScrollArea):
@@ -84,7 +117,7 @@ class HomeInterface(ScrollArea):
     def _build_header(self):
         self.vBox.addWidget(W.PageHeading(
             "视频解析",
-            "粘一条分享链接，选清晰度，下载。解析结果会展开在下方，不用切页。",
+            "自动识别分享文案中的链接，默认选择最高画质。",
             self.view))
 
     def _build_work_panel(self):
@@ -103,8 +136,8 @@ class HomeInterface(ScrollArea):
         self.pasteBtn = PushButton(FIF.PASTE, "粘贴", self.panel)
         self.pasteBtn.setToolTip("从剪贴板粘贴分享链接（Ctrl+V 也可以直接粘进输入框）")
         self.pasteBtn.clicked.connect(self._on_paste)
-        self.parseBtn = PrimaryPushButton(FIF.SEARCH, "解析", self.panel)
-        self.parseBtn.setFixedHeight(34)
+        self.parseBtn = _PrimaryButton(FIF.SEARCH, "解析", self.panel)
+        self.parseBtn.setFixedHeight(40)
         self.parseBtn.setMinimumWidth(96)
         self.parseBtn.clicked.connect(self._on_parse)
         self.parseBtn.setToolTip("解析链接（输入框里回车同样可以）")
@@ -112,13 +145,13 @@ class HomeInterface(ScrollArea):
         self.linkEdit = LineEdit(self.panel)
         # 平台清单已经在下方说过了，这里只讲"粘什么、然后怎么走"
         self.linkEdit.setPlaceholderText(
-            "粘贴分享链接或分享文案，回车解析　·　也支持禁漫车号 JM123456")
+            "粘贴链接、分享文案或 JM 车号，按 Enter 解析")
         self.linkEdit.setClearButtonEnabled(True)
-        self.linkEdit.setFixedHeight(34)
+        self.linkEdit.setFixedHeight(40)
         self.linkEdit.setSizePolicy(QSizePolicy.Policy.Expanding,
                                     QSizePolicy.Policy.Fixed)
         self.linkEdit.returnPressed.connect(self._on_parse)
-        self.pasteBtn.setFixedHeight(34)
+        self.pasteBtn.setFixedHeight(40)
         row.addWidget(self.linkEdit, 1)
         row.addWidget(self.pasteBtn)
         row.addWidget(self.parseBtn)
@@ -152,14 +185,13 @@ class HomeInterface(ScrollArea):
         emptyLay.setSpacing(0)
         emptyLay.addStretch(1)
         self.emptyState = W.EmptyState(
-            FIF.SEARCH, "粘贴链接开始解析",
-            "解析成功后这里会展示作品信息与清晰度选项；\n"
-            "图集与禁漫车号（JM123456）同样支持。",
+            FIF.SEARCH, "等待解析",
+            "解析后可选择画质、预览并下载。",
             self.emptyWrap)
         emptyLay.addWidget(self.emptyState)
         emptyLay.addStretch(2)
         # 空态需要一块明确的"舞台"高度，否则收起时面板会塌成一条
-        self.emptyWrap.setMinimumHeight(300)
+        self.emptyWrap.setMinimumHeight(220)
 
         # 结果与空态共用一个容器：同一块区域在"还没解析"和"解析好了"之间切换，
         # 高度不会被内容撑来撑去，切页/解析时布局不跳动。
@@ -224,10 +256,9 @@ class HomeInterface(ScrollArea):
 
         result.addWidget(W.Divider(self.resultCard))
 
-        # 清晰度 + 动作条：左侧「选什么」，右侧「拿到文件」
-        # 主操作只留一个（下载），其余降为图标 + tooltip，减少一排等权文字按钮
-        actions = QHBoxLayout()
-        actions.setSpacing(D.GAP_SM)
+        # 画质与操作分行，长画质名称不会把下载按钮挤出窄窗口。
+        qualityRow = QHBoxLayout()
+        qualityRow.setSpacing(D.GAP_SM)
         self.qualityLabel = W.text_label("清晰度", self.resultCard, D.TEXT_SECONDARY,
                                          D.FONT_CAPTION)
         self.qualityCombo = ComboBox(self.resultCard)
@@ -239,9 +270,15 @@ class HomeInterface(ScrollArea):
         self.fpsBadge.setVisible(False)
         self.fpsBadge.setToolTip(
             "当前档位帧率：60fps 更顺滑（码率通常更低），30fps 码率更高")
-        actions.addWidget(self.qualityLabel)
-        actions.addWidget(self.qualityCombo)
-        actions.addWidget(self.fpsBadge)
+        self.qualityCombo.setMaximumWidth(360)
+        qualityRow.addWidget(self.qualityLabel)
+        qualityRow.addWidget(self.qualityCombo)
+        qualityRow.addWidget(self.fpsBadge)
+        qualityRow.addStretch(1)
+        result.addLayout(qualityRow)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(D.GAP_SM)
         actions.addStretch(1)
 
         self.copyLinkBtn = TransparentToolButton(FIF.LINK, self.resultCard)
@@ -257,7 +294,7 @@ class HomeInterface(ScrollArea):
         self.previewBtn = PushButton(FIF.VIEW, "预览", self.resultCard)
         self.previewBtn.setToolTip("下载前在窗口里预览画面")
         self.previewBtn.clicked.connect(self._on_preview)
-        self.downloadBtn = PrimaryPushButton(FIF.DOWNLOAD, "下载视频",
+        self.downloadBtn = _PrimaryButton(FIF.DOWNLOAD, "下载视频",
                                              self.resultCard)
         self.downloadBtn.setFixedHeight(34)
         self.downloadBtn.clicked.connect(self._on_download)
@@ -295,9 +332,9 @@ class HomeInterface(ScrollArea):
         self._parse_input = text
         self._parse_running = True
         self.parseBtn.setEnabled(False)
+        self.parseBtn.setText("解析中…")
         self.resultStack.setCurrentIndex(0)
-        self.emptyState.set_text("正在解析…", "根据站点不同，通常 1~5 秒；"
-                                             "需要登录的内容会稍慢。")
+        self.emptyState.set_text("正在解析…", "正在获取作品信息与可用画质，请稍候。")
         self.emptyState.set_body_visible(True)
         self._current = None
         self.progress.show()
@@ -400,10 +437,10 @@ class HomeInterface(ScrollArea):
             self.qualityCombo.setVisible(True)
             # 下拉里文字可能变长，按最长项自适应宽度
             self.qualityCombo.setMinimumWidth(
-                max(220, self.qualityCombo.fontMetrics().horizontalAdvance(
+                min(360, max(220, self.qualityCombo.fontMetrics().horizontalAdvance(
                     max((self.qualityCombo.itemText(i)
                          for i in range(self.qualityCombo.count())),
-                        default="")) + 56))
+                        default="")) + 56)))
             if self.qualityCombo.count() == 1:
                 self.qualityCombo.setEnabled(False)
                 self.qualityCombo.setToolTip("该来源仅提供这一档画质")
@@ -418,7 +455,13 @@ class HomeInterface(ScrollArea):
 
         if info.cover_url:
             w = CoverWorker(info.cover_url, self)
-            w.loaded.connect(self._set_cover)
+            generation = self._parse_generation
+
+            def apply_cover(data):
+                if generation == self._parse_generation and self._current is info:
+                    self._set_cover(data)
+
+            w.loaded.connect(apply_cover)
             w.finished.connect(lambda: self._cleanup_worker(w))
             self._workers.append(w)
             w.start()
@@ -435,6 +478,7 @@ class HomeInterface(ScrollArea):
             self._empty_result_retries = 1
             generation, text = self._parse_generation, self._parse_input
             self.progress.show()
+            self.emptyState.set_text("正在重试…", "站点暂未返回作品数据，正在自动重试一次。")
             QTimer.singleShot(1800, lambda: self._retry_empty_result(generation, text))
             return
         self._parse_done()
@@ -457,6 +501,7 @@ class HomeInterface(ScrollArea):
     def _parse_done(self):
         self._parse_running = False
         self.parseBtn.setEnabled(True)
+        self.parseBtn.setText("解析")
         self.progress.hide()
 
     def _set_cover(self, data: bytes):
@@ -467,6 +512,7 @@ class HomeInterface(ScrollArea):
     def _update_fps_badge(self, *_):
         """把当前选中档位的帧率做成徽章（≥50fps 绿、30fps 浅、更低橙）"""
         info = self._current
+        self.qualityCombo.setToolTip(self.qualityCombo.currentText() or "选择下载画质")
         fps = 0
         # 用 isHidden() 而不是 isVisible()：后者在窗口还没 show() 时恒为 False，
         # 会把帧率徽章误判成"不该显示"

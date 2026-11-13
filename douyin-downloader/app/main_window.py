@@ -219,8 +219,14 @@ class MainWindow(FluentWindow):
         """
         if isinstance(interface, QAbstractScrollArea):
             interface.verticalScrollBar().setValue(0)
-        self.stackedWidget.view.setCurrentWidget(
-            interface, False, True, D.DUR_ENTER, D.EASE_ENTER)
+        view = self.stackedWidget.view
+        if D.reduce_motion():
+            # 动画中途关闭动效时先走到终点，避免上一次切页完成后跳回旧页面。
+            animation = getattr(view, "_ani", None)
+            if animation is not None and animation.state() == animation.State.Running:
+                animation.setCurrentTime(animation.duration())
+        view.setAnimationEnabled(not D.reduce_motion())
+        view.setCurrentWidget(interface, False, True, D.DUR_BASE, D.EASE_ENTER)
 
     def resizeEvent(self, event):
         """标题栏顶到最左、横跨整窗。
@@ -256,8 +262,8 @@ class MainWindow(FluentWindow):
         for itf in self._pages:
             name = itf.objectName()
             D.theme_qss(itf,
-                        f"#{name}{{background:transparent;}}",
-                        f"#{name}{{background:transparent;}}")
+                        f"#{name}{{background:transparent;border:none;}}",
+                        f"#{name}{{background:transparent;border:none;}}")
         # stackedWidget 默认给页面铺一层不透明底（FLUENT_WINDOW 样式），同样要透明
         self.stackedWidget.setStyleSheet("background: transparent; border: none;")
         # Mica 云母特效需要持续采样桌面做模糊合成，在部分机器上是滚动卡顿的主因。
@@ -285,23 +291,18 @@ class MainWindow(FluentWindow):
         self._refresh_status()
 
     def _open_download_dir(self):
-        """点状态条右侧（下载目录）直接打开文件夹"""
-        from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QDesktopServices
-        path = self.ctx.config.get("download_path")
-        if path:
-            os.makedirs(path, exist_ok=True)
-            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        """底栏与任务页共用目录打开及失败反馈。"""
+        self.taskInterface._open_download_dir()
 
     def _refresh_status(self):
         tasks = self.ctx.manager.all_tasks()
-        running = sum(1 for t in tasks if t.status in ("下载中", "合并中"))
+        running = sum(1 for t in tasks if t.status in ("下载中", "合并中", "转换中"))
         waiting = sum(1 for t in tasks if t.status == "等待中")
         done = sum(1 for t in tasks if t.status == "已完成")
         self.statusBar.set_busy(bool(running or waiting))
         if running or waiting:
             self.statusBar.set_message(
-                f"后台下载中 {running + waiting} 个（进行 {running} · 排队 {waiting}）")
+                f"后台任务 {running + waiting} 个（进行 {running} · 排队 {waiting}）")
         else:
             self.statusBar.set_message(
                 f"空闲 · 已完成 {done} 个下载" if done else "空闲")
@@ -402,3 +403,7 @@ class MainWindow(FluentWindow):
         theme = {"dark": Theme.DARK, "light": Theme.LIGHT,
                  "auto": Theme.AUTO}.get(key, Theme.LIGHT)
         setTheme(theme)
+        combo = self.settingInterface.themeCombo
+        blocked = combo.blockSignals(True)
+        combo.setCurrentIndex({"dark": 0, "light": 1, "auto": 2}.get(key, 0))
+        combo.blockSignals(blocked)

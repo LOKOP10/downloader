@@ -97,8 +97,8 @@ def font(size: int = FONT_BODY, weight=W_REGULAR) -> QFont:
 # 注意深色底的三个层次和浅色是**反过来**的：深色下 bg-primary 近纯黑、
 # 面板比页面亮；浅色下页面是浅灰、面板纯白。照着抄别自己发挥。
 TEXT_PRIMARY = ("#18181B", "#FAFAFA")      # zinc-900 / zinc-50
-TEXT_SECONDARY = ("#52525B", "#A1A1AA")    # zinc-600 / zinc-400
-TEXT_TERTIARY = ("#71717A", "#71717A")     # zinc-500（浅深两套同值）
+TEXT_SECONDARY = ("#4D5562", "#B1B8C5")    # 次级正文，保留清晰的明暗层级
+TEXT_TERTIARY = ("#626B78", "#9097A4")     # 小字号说明在两套主题下均保持可读
 TEXT_ACCENT = ("#1A4A8E", "#8AB4FF")       # 强调文字/链接，取自深海蓝
 
 # 语义色**不直接用 Tailwind 调色板原值**：它的 warning #f59e0b / error #ef4444 是给
@@ -154,9 +154,9 @@ SURFACE_SUNKEN = BG_TERTIARY
 HAIRLINE = BORDER
 
 # 帧率徽章配色（≥50 绿 / 30 中性 / 更低橙）
-FPS_HIGH = ("rgba(22,163,74,0.18)", "#16A34A")
-FPS_MID = ("rgba(128,128,128,0.18)", "#8A8F98")
-FPS_LOW = ("rgba(217,119,6,0.18)", "#D97706")
+FPS_HIGH = SUCCESS
+FPS_MID = TEXT_SECONDARY
+FPS_LOW = WARNING
 
 # --------------------------------------------------------------------- 强调色
 # 9 套预设强调色（默认深海蓝），色值取自一套现成的派生色板（每套另带
