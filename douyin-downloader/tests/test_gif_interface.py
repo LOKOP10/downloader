@@ -238,7 +238,7 @@ class GifInterfaceTest(unittest.TestCase):
             QTest.mouseClick(w.previewBtn, Qt.MouseButton.LeftButton)
             self.assertTrue(opened.call_args.args[0].endswith(".gif"))
             QTest.mouseClick(w.openBtn, Qt.MouseButton.LeftButton)
-            self.assertEqual(Path(opened.call_args.args[0]), Path(w.outputEdit.text()))
+            self.assertEqual(Path(opened.call_args.args[0]).resolve(), Path(w.outputEdit.text()).resolve())
 
     def test_parse_seconds_formats(self):
         self.assertEqual(_parse_seconds("", 7), 7)
