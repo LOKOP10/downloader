@@ -148,7 +148,7 @@ class VideoLibraryTest(unittest.TestCase):
         window.show()
         self.app.processEvents()
         self.addCleanup(window.close)
-        self.assertEqual(window.tabBar.count(), 9)
+        self.assertEqual(window.tabBar.count(), 6)
         self.assertIs(window._pages[4], window.videoInterface)
         page = window.videoInterface
         window.switchTo(page)

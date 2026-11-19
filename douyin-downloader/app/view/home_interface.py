@@ -20,22 +20,19 @@
 import os
 
 from PySide6.QtCore import QMimeData, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPixmap
-from PySide6.QtWidgets import (QHBoxLayout, QSizePolicy, QStackedWidget,
+from PySide6.QtGui import QGuiApplication, QPixmap
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QSizePolicy, QStackedWidget,
                                QVBoxLayout, QWidget)
 from qfluentwidgets import (BodyLabel, ComboBox, FluentIcon as FIF,
                             IndeterminateProgressBar, InfoBar, InfoBarPosition,
-                            LineEdit, PrimaryPushButton, PushButton, ScrollArea,
+                            LineEdit, PushButton, ScrollArea,
                             StrongBodyLabel, TransparentToolButton)
-
-from qfluentwidgets.common.config import qconfig
-from qfluentwidgets.common.icon import FluentIconBase
-from qfluentwidgets.common.style_sheet import setCustomStyleSheet
 
 from ..core.applog import get_logger
 from ..core.domain import needs_cookie_for_source
 from ..core.models import (VideoInfo, dropdown_quality_indices, fmt_count,
                            fmt_size)
+from ..core.platform_registry import is_comic, open_label_for
 from ..core.site_ctx import SiteContext
 from ..core.workers import CoverWorker, ParseWorker
 from . import design as D
@@ -50,35 +47,6 @@ _PLATFORM_LINE = ("抖音 · B站 · 小红书 · X · Instagram · YouTube · P
                   "　｜　视频 / 图集 / 漫画车号")
 
 
-class _PrimaryButton(PrimaryPushButton):
-    """按实际强调色选择文字和图标前景，兼容深色与浅色预设。"""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._apply_foreground()
-        W.on_theme(self, self._apply_foreground)
-        qconfig.themeColorChanged.connect(self._apply_foreground)
-
-    def _foreground(self):
-        color = W.accent()
-        channels = [color.redF(), color.greenF(), color.blueF()]
-        linear = [value / 12.92 if value <= 0.04045 else
-                  ((value + 0.055) / 1.055) ** 2.4 for value in channels]
-        luminance = sum(value * weight for value, weight in
-                        zip(linear, (0.2126, 0.7152, 0.0722)))
-        return QColor("#FFFFFF" if luminance < 0.179 else "#18181B")
-
-    def _apply_foreground(self, *_):
-        style = f"PrimaryPushButton{{color:{self._foreground().name()};}}"
-        setCustomStyleSheet(self, style, style)
-        self.update()
-
-    def _drawIcon(self, icon, painter, rect, state=QIcon.Off):
-        if isinstance(icon, FluentIconBase):
-            icon = icon.icon(color=self._foreground())
-        PushButton._drawIcon(self, icon, painter, rect, state)
-
-
 class HomeInterface(ScrollArea):
     def __init__(self, ctx, parent=None):
         super().__init__(parent)
@@ -90,7 +58,7 @@ class HomeInterface(ScrollArea):
         self.view = QWidget(self)
         self.setWidget(self.view)
         self.view.setObjectName("homeView")
-        self.vBox = W.page_body(self.view, pad=28, spacing=14)
+        self.vBox = W.page_body(self.view)
 
         self._current: VideoInfo = None
         self._workers = []
@@ -136,7 +104,7 @@ class HomeInterface(ScrollArea):
         self.pasteBtn = PushButton(FIF.PASTE, "粘贴", self.panel)
         self.pasteBtn.setToolTip("从剪贴板粘贴分享链接（Ctrl+V 也可以直接粘进输入框）")
         self.pasteBtn.clicked.connect(self._on_paste)
-        self.parseBtn = _PrimaryButton(FIF.SEARCH, "解析", self.panel)
+        self.parseBtn = W.PrimaryButton(FIF.SEARCH, "解析", self.panel)
         self.parseBtn.setFixedHeight(40)
         self.parseBtn.setMinimumWidth(96)
         self.parseBtn.clicked.connect(self._on_parse)
@@ -159,17 +127,17 @@ class HomeInterface(ScrollArea):
 
         hint = W.text_label(_PLATFORM_LINE, self.panel, D.TEXT_TERTIARY,
                             D.FONT_CAPTION, wrap=True)
-        hint.setContentsMargins(0, 8, 0, 0)
+        hint.setContentsMargins(0, 6, 0, 0)
         self.panel.body.addWidget(hint)
 
         self.progress = IndeterminateProgressBar(self.panel)
         self.progress.setFixedHeight(3)
         self.progress.hide()
-        self.panel.body.addSpacing(8)
+        self.panel.body.addSpacing(6)
         self.panel.body.addWidget(self.progress)
 
         # ---------------- 结果分区 ----------------
-        self.panel.body.addSpacing(12)
+        self.panel.body.addSpacing(10)
         self.panel.body.addWidget(W.Divider(self.panel))
         self.panel.body.addSpacing(12)
 
@@ -282,32 +250,43 @@ class HomeInterface(ScrollArea):
         actions.addStretch(1)
 
         self.copyLinkBtn = TransparentToolButton(FIF.LINK, self.resultCard)
+        self.copyLinkBtn.setFixedSize(32, 32)
         self.copyLinkBtn.setToolTip("复制无水印链接")
         self.copyLinkBtn.clicked.connect(self._on_copy_link)
         self.copyTitleBtn = TransparentToolButton(FIF.COPY, self.resultCard)
+        self.copyTitleBtn.setFixedSize(32, 32)
         self.copyTitleBtn.setToolTip("复制标题")
         self.copyTitleBtn.clicked.connect(
             lambda: self._copy(self.titleLabel.text(), "已复制标题"))
+
+        sep = QFrame(self.resultCard)
+        sep.setFixedSize(1, 18)
+        D.theme_qss(sep,
+                    f"QFrame{{background:{D.BORDER[0]};}}",
+                    f"QFrame{{background:{D.BORDER[1]};}}")
+
         self.coverBtn = PushButton(FIF.PHOTO, "封面", self.resultCard)
+        self.coverBtn.setFixedHeight(32)
         self.coverBtn.setToolTip("只下载封面图片")
         self.coverBtn.clicked.connect(self._on_download_cover)
         self.previewBtn = PushButton(FIF.VIEW, "预览", self.resultCard)
+        self.previewBtn.setFixedHeight(32)
         self.previewBtn.setToolTip("下载前在窗口里预览画面")
         self.previewBtn.clicked.connect(self._on_preview)
-        self.downloadBtn = _PrimaryButton(FIF.DOWNLOAD, "下载视频",
-                                             self.resultCard)
+        self.downloadBtn = W.PrimaryButton(FIF.DOWNLOAD, "下载视频",
+                                           self.resultCard)
         self.downloadBtn.setFixedHeight(34)
         self.downloadBtn.clicked.connect(self._on_download)
 
         actions.addWidget(self.copyLinkBtn)
         actions.addWidget(self.copyTitleBtn)
         actions.addSpacing(D.GAP_XS)
+        actions.addWidget(sep)
+        actions.addSpacing(D.GAP_XS)
         actions.addWidget(self.coverBtn)
         actions.addWidget(self.previewBtn)
         actions.addWidget(self.downloadBtn)
         result.addLayout(actions)
-        # 内容贴顶：底部留白属于画布（有光晕），不要用空白把操作条推到最下
-        result.addStretch(1)
 
     # ------------------------------------------------------------------ #
     def _on_paste(self):
@@ -366,7 +345,7 @@ class HomeInterface(ScrollArea):
         if not info.is_image:
             self.durationChip.setText(f"时长 {info.duration_text}")
             self.durationChip.setVisible(True)
-        elif info.source == "jmcomic":
+        elif is_comic(info.source):
             pages = (info.extra or {}).get("pages")
             self.durationChip.setText(f"{pages} 页" if pages else "整本")
             self.durationChip.setVisible(True)
@@ -382,7 +361,7 @@ class HomeInterface(ScrollArea):
         if not info.is_image:
             if info.quality:
                 parts.append(f"画质 {info.quality}")
-        elif info.source == "jmcomic":
+        elif is_comic(info.source):
             extra = info.extra or {}
             chapters = extra.get("chapters")
             pages = extra.get("pages")
@@ -399,7 +378,7 @@ class HomeInterface(ScrollArea):
         self.metaLabel.setText(" · ".join(parts))
         # 统计：显示折成「万」，精确值放 tooltip —— 量级要一眼可读，精度不能丢
         # 第三个统计位：抖音等平台是分享数；YouTube 拿到的其实是播放量，别标成"分享"
-        play_label = "观看" if info.source == "youtube" else "分享"
+        play_label = open_label_for(info.source)
         self.statsLabel.set_stats([
             ("点赞", fmt_count(info.digg_count)),
             ("评论", fmt_count(info.comment_count)),
@@ -408,7 +387,7 @@ class HomeInterface(ScrollArea):
         self.statsLabel.setToolTip(
             f"点赞 {info.digg_count}　评论 {info.comment_count}　"
             f"{play_label} {info.share_count}")
-        if info.source == "jmcomic":
+        if is_comic(info.source):
             self.downloadBtn.setText("下载本子")
             self.downloadBtn.setIcon(FIF.PHOTO)
         else:
@@ -561,9 +540,9 @@ class HomeInterface(ScrollArea):
         # 禁漫预览要靠 Cookie 换原图，但它不在 needs_cookie_for_source 里
         # （CDN 直链本身不需要 Cookie），所以这里显式带上
         cookie = ""
-        if needs_cookie_for_source(info.source) or info.source == "jmcomic":
+        if needs_cookie_for_source(info.source) or is_comic(info.source):
             cookie = context.cookie_for(info.source)
-        cover = self.coverLabel.pixmap() if info.source == "jmcomic" else None
+        cover = self.coverLabel.pixmap() if is_comic(info.source) else None
         dialog = PreviewDialog(
             info, url=url, label=label, cookies=cookie, cover=cover,
             parent=self)
@@ -582,7 +561,7 @@ class HomeInterface(ScrollArea):
         # 一次下载只生成一次文件名：多次调用 build_filename 会因跨秒得到不同
         # 时间戳，导致视频与其封面失去同名前缀（删除时找不到关联封面）
         fname = cfg.build_filename(info)
-        if info.source == "jmcomic":
+        if is_comic(info.source):
             folder = os.path.join(base, fname)
             self.ctx.manager.add(
                 info.play_url, folder, info.safe_title(60),

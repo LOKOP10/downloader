@@ -95,7 +95,7 @@ class TaskInterface(ScrollArea):
         self.view = QWidget(self)
         self.view.setObjectName("taskView")
         self.setWidget(self.view)
-        self.vBox = W.page_body(self.view, pad=24, spacing=12)
+        self.vBox = W.page_body(self.view)
 
         self._rows = {}   # task_id -> row
         self._filter = 0
@@ -352,7 +352,9 @@ class TaskInterface(ScrollArea):
 
         self.table.setItem(row, COL_SPEED, QTableWidgetItem("--"))
         self.table.setCellWidget(row, COL_QUALITY, self._quality_widget(info.quality))
-        self.table.setItem(row, COL_STATUS, QTableWidgetItem(info.status))
+        status_item = QTableWidgetItem(info.status)
+        self._style_status_item(status_item, info.status)
+        self.table.setItem(row, COL_STATUS, status_item)
 
         actions = QWidget(self.table)
         h = QHBoxLayout(actions)
@@ -453,11 +455,24 @@ class TaskInterface(ScrollArea):
                 if status_item.text() != text:
                     status_changed = True
                     status_item.setText(text)
+                    self._style_status_item(status_item, text)
                     status_item.setToolTip(
                         f"失败原因：{info.error}" if info.error else info.status)
             self._apply_row_filter(row, info)
         if status_changed:
             self._refresh_summary()
+
+    @staticmethod
+    def _style_status_item(item: QTableWidgetItem, status: str) -> None:
+        """按状态赋克制的语义色，方便快速扫读失败或已完成的任务。"""
+        if status == "已完成":
+            item.setForeground(W.col(D.SUCCESS))
+        elif status == "失败":
+            item.setForeground(W.col(D.DANGER))
+        elif status in ("下载中", "合并中", "转换中"):
+            item.setForeground(W.col(D.TEXT_ACCENT))
+        else:
+            item.setData(Qt.ForegroundRole, None)
 
     def _refresh_summary(self):
         """摘要 + 分段计数：任务状态变化时才重算，避免每次进度更新都全量遍历"""
@@ -612,8 +627,13 @@ class TaskInterface(ScrollArea):
         if info.status in ("下载中", "等待中", "合并中", "转换中"):
             self._toast("无法删除", "任务正在进行，请先取消任务再删除文件", "warning")
             return
+        # 终态字段可能已写入，但工作线程仍在清理；不能提前删除它的产物。
+        finished = next((t for t in mgr.finished_tasks() if t.task_id == task_id), None)
+        if finished is None:
+            self._toast("无法删除", "任务仍在收尾，请稍后再试", "warning")
+            return
 
-        path = info.save_path or ""
+        path = finished.save_path or ""
         exists = bool(path) and os.path.exists(path)
         is_dir = exists and os.path.isdir(path)
         extras = [] if is_dir else self._related_files(path)
@@ -631,6 +651,12 @@ class TaskInterface(ScrollArea):
                              "本地文件已不在原位置，是否仅清除这条任务记录？",
                              self.window())
         if not box.exec():
+            return
+
+        # 确认框会运行嵌套事件循环，期间任务可能被重试或路径发生变化。
+        current = next((t for t in mgr.finished_tasks() if t.task_id == task_id), None)
+        if current is None or (current.save_path or "") != path:
+            self._toast("任务状态已变化", "请重新确认任务状态和保存路径后再删除", "warning")
             return
 
         # 先发取消信号，避免下载线程继续写这个文件

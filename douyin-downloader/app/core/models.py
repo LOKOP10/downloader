@@ -3,7 +3,7 @@
 import os
 import re
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Tuple
 
 
@@ -117,7 +117,11 @@ class VideoInfo:
 
 @dataclass
 class DownloadTaskInfo:
-    """下载任务状态"""
+    """任务字段值；管理器公开返回独立副本，后台更新不修改已交付的值。
+
+    字段均为不可变标量。snapshot 本身不提供同步，管理器在状态锁内调用。
+    保留可写数据类以兼容离线构造和现有消费者；修改副本不会操作下载任务。
+    """
     task_id: str = ""
     url: str = ""
     save_path: str = ""
@@ -131,6 +135,9 @@ class DownloadTaskInfo:
     cover_url: str = ""           # 解析出的封面地址（本地视频库自动入库取封面用，可空）
     convert_to_gif: bool = False  # 下载完成后把视频轨转成 GIF（抖音图文动图）
     gif_path: str = ""            # 转换后的 GIF 目标路径（convert_to_gif 时使用）
+
+    def snapshot(self) -> "DownloadTaskInfo":
+        return replace(self)
 
     @property
     def percent(self) -> int:

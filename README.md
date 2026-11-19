@@ -7,7 +7,7 @@
 
 ## 架构
 
-两个工程都是「界面 → 核心 → 基础设施」三层，**站点差异全部收敛在解析器里**。
+两个工程分别按「界面 → 核心 → 基础设施」组织。站点识别和解析由核心层负责，登录入口与部分媒体展示仍由界面层配合。
 
 ```
 桌面端                                     安卓端
@@ -36,10 +36,10 @@
 |---|---|---|
 | 入口 / 壳层 | `main.py`、`app/main_window.py` | 标题栏 + 侧栏 + 内容画布 + 状态条 |
 | 界面 | `app/view/` | `design.py` 设计 token、`workspace.py` 壳层组件、`*_interface.py` 九个页面 |
-| 解析 | `app/core/parser.py`、`sites.py` | 识别链接所属站点，产出画质与直链 |
+| 解析 | `app/core/domain.py`、`platform_registry.py`、`parser.py`、`sites.py` | 校验站点域名，按注册表分派解析，产出画质与直链 |
 | 下载 | `app/core/downloader.py` | IDM 式多连接分段，1–32 连接 |
 | 功能引擎 | `app/core/` | `webp_converter` / `mp4_to_gif` / `frame_export` / `video_library` / `manga` |
-| 基础设施 | `app/core/` | `proxy.py` 系统代理、`browser_bridge.py` 驱动本机 Edge 取 Cookie、`ffmpeg.py` 合并组件 |
+| 基础设施 | `app/core/` | `proxy.py` 系统代理、`media_proxy.py` 本地媒体预览、`http_headers.py` 请求头、`browser_bridge.py` 浏览器登录、`ffmpeg.py` 合并组件 |
 
 数据流：粘贴链接 → 识别站点 → 解析出画质 → 选画质 → 分段下载 → 落盘 → 自动入库。
 
@@ -57,9 +57,10 @@
 
 ### 共同约定
 
-- **加一个站点 = 加一个解析器 + 在站点表登记**，其它层不用动。
+- 桌面端增加站点时，在 `domain.py` 登记安全域名，在 `platform_registry.py` 声明解析入口、所需上下文和站点能力（是否按本子组织、统计标签），并提供解析器；界面按能力表取行为，不写死站名。
 - 解析与下载解耦：解析层只产出媒体信息与直链，下载层只认地址列表。
 - 各端不共享代码：改一个站点要各端分别改。
+- 分层方向由 `douyin-downloader/tests/test_architecture_boundaries.py` 守卫：核心不依赖界面、页面之间不互相 import、核心层的 Qt 依赖只允许出现在适配文件里。
 - 功能引擎各自独立，界面层不直接处理字节流。
 
 ## 目录结构

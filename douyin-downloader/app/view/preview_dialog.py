@@ -1,10 +1,6 @@
 # -*- coding: utf-8 -*-
 """解析后、下载前的独立预览窗口。视频经本机临时代理保留 CDN 所需请求头。"""
-import secrets
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import requests
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -12,13 +8,13 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QSlider, QStyle,
                                QVBoxLayout)
-from qfluentwidgets import FluentIcon as FIF, PrimaryPushButton, PushButton
+from qfluentwidgets import FluentIcon as FIF, PushButton
 
-from ..core.domain import needs_cookie_for_url
-from ..core.downloader import headers_for
-from ..core.models import clean_cookie
+from ..core.media_proxy import LocalMediaProxy, media_headers
+from ..core.platform_registry import is_comic
 from ..core.workers import JmPreviewOpenWorker, JmPreviewPageWorker
 from . import design as D
+from . import workspace as W
 
 # 后台线程活到自然结束：窗口关掉时线程可能还在跑，跟着窗口一起析构会触发
 # 「QThread: Destroyed while thread is still running」并把进程带崩。
@@ -29,16 +25,6 @@ def _keep(worker):
     _LIVE_WORKERS.add(worker)
     worker.finished.connect(lambda: _LIVE_WORKERS.discard(worker))
     return worker
-
-
-def media_headers(url, cookies="", byte_range=""):
-    """和下载任务使用相同的 Referer / 按目标 CDN 判断是否带 Cookie。"""
-    headers = headers_for(url)
-    if cookies and needs_cookie_for_url(url):
-        headers["Cookie"] = clean_cookie(cookies)
-    if byte_range:
-        headers["Range"] = byte_range
-    return headers
 
 
 class ClickableSlider(QSlider):
@@ -93,76 +79,6 @@ class ClickableSlider(QSlider):
         event.accept()
 
 
-class _LocalMedia(ThreadingHTTPServer):
-    daemon_threads = True
-    allow_reuse_address = True
-
-    def __init__(self, tracks, cookies):
-        super().__init__(("127.0.0.1", 0), _MediaHandler)
-        self.tracks = tracks
-        self.cookies = cookies
-        self.token = secrets.token_urlsafe(24)
-        self.thread = threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.05},
-                                       daemon=True)
-        self.thread.start()
-
-    def url(self, track):
-        return QUrl(f"http://127.0.0.1:{self.server_port}/{self.token}/{track}")
-
-    def stop(self):
-        self.shutdown()
-        self.server_close()
-        self.thread.join(timeout=1)
-
-
-class _MediaHandler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
-    def log_message(self, *_args):
-        pass
-
-    def do_HEAD(self):
-        self._serve(head_only=True)
-
-    def do_GET(self):
-        self._serve(head_only=False)
-
-    def _serve(self, head_only=False):
-        parts = self.path.split("?")[0].split("/")
-        if len(parts) != 3 or parts[1] != self.server.token or parts[2] not in self.server.tracks:
-            self.send_error(404)
-            return
-        urls = self.server.tracks[parts[2]]
-        byte_range = self.headers.get("Range", "")
-        for url in urls:
-            try:
-                with requests.request("HEAD" if head_only else "GET", url,
-                                      headers=media_headers(url, self.server.cookies, byte_range),
-                                      stream=True, timeout=(8, 20)) as upstream:
-                    if upstream.status_code not in (200, 206):
-                        continue
-                    if byte_range and upstream.status_code != 206:
-                        continue   # Qt seek 请求不能误回整段媒体
-                    self.send_response(upstream.status_code)
-                    for name in ("Content-Type", "Content-Length", "Content-Range",
-                                 "Accept-Ranges"):
-                        value = upstream.headers.get(name)
-                        if value:
-                            self.send_header(name, value)
-                    self.send_header("Connection", "close")
-                    self.end_headers()
-                    if not head_only:
-                        for chunk in upstream.iter_content(64 * 1024):
-                            if chunk:
-                                self.wfile.write(chunk)
-                    return
-            except (requests.RequestException, BrokenPipeError, ConnectionResetError,
-                    OSError):
-                # 连接中断（关闭窗口/拖进度）无需继续尝试其它 CDN。
-                return
-        self.send_error(502, "媒体源不可用")
-
-
 class PreviewDialog(QDialog):
     """视频流预览及图集翻页；accept 表示用户在预览中确认下载。"""
 
@@ -188,7 +104,10 @@ class PreviewDialog(QDialog):
         self._jm_busy = False
         self.setWindowTitle("下载前预览")
         self.resize(780, 660)
-        self.setStyleSheet("QDialog{background:transparent;}")
+        self.setObjectName("previewDialog")
+        D.theme_qss(self,
+                    f"QDialog#previewDialog{{background:{D.BG_PRIMARY[0]};}}",
+                    f"QDialog#previewDialog{{background:{D.BG_PRIMARY[1]};}}")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 14)
         layout.setSpacing(10)
@@ -212,10 +131,10 @@ class PreviewDialog(QDialog):
         self.stage.setFont(D.font(D.FONT_CAPTION))
         # 舞台用最深的一档底 + 1px 描边：视频/图片浮在上面，边界一眼可见
         D.theme_qss(self.stage,
-                    "QLabel{background:#0B0B0D;color:#71717A;border:1px solid #27272A;"
-                    "border-radius:10px;}",
-                    "QLabel{background:#050506;color:#71717A;border:1px solid #27272A;"
-                    "border-radius:10px;}")
+                    f"QLabel{{background:{D.STAGE_BG[0]};color:#A1A1AA;border:1px solid {D.STAGE_BORDER[0]};"
+                    f"border-radius:{D.RADIUS_MD}px;}}",
+                    f"QLabel{{background:{D.STAGE_BG[1]};color:{D.TEXT_TERTIARY[1]};border:1px solid {D.STAGE_BORDER[1]};"
+                    f"border-radius:{D.RADIUS_MD}px;}}")
         layout.addWidget(self.stage, 1)
         self.controls = QHBoxLayout()
         self.controls.setSpacing(8)
@@ -232,13 +151,13 @@ class PreviewDialog(QDialog):
         actions.addStretch()
         close = PushButton("关闭", self)
         close.clicked.connect(self.reject)
-        download = PrimaryPushButton(FIF.DOWNLOAD, "下载当前作品", self)
+        download = W.PrimaryButton(FIF.DOWNLOAD, "下载当前作品", self)
         download.clicked.connect(self.accept)
         actions.addWidget(close)
         actions.addWidget(download)
         layout.addLayout(actions)
         if info.is_image:
-            if info.source == "jmcomic":
+            if is_comic(info.source):
                 self._setup_jm(info, cover)
             else:
                 prev = PushButton("上一张", self)
@@ -257,7 +176,7 @@ class PreviewDialog(QDialog):
             audio_url = info.audio_map.get(url, "")
             if audio_url:
                 tracks["audio"] = [audio_url] + info.audio_backups_of(audio_url)
-            self._proxy = _LocalMedia(tracks, cookies)
+            self._proxy = LocalMediaProxy(tracks, cookies)
             self.stage.hide()
             video_widget = QVideoWidget(self)
             video_widget.setMinimumHeight(380)
@@ -266,12 +185,12 @@ class PreviewDialog(QDialog):
             output = QAudioOutput(self)
             self._player.setAudioOutput(output)
             self._player.setVideoOutput(video_widget)
-            self._player.setSource(self._proxy.url("video"))
+            self._player.setSource(QUrl(self._proxy.url("video")))
             if audio_url:
                 self._audio_player = QMediaPlayer(self)
                 self._audio_output = QAudioOutput(self)
                 self._audio_player.setAudioOutput(self._audio_output)
-                self._audio_player.setSource(self._proxy.url("audio"))
+                self._audio_player.setSource(QUrl(self._proxy.url("audio")))
                 self._player.positionChanged.connect(self._sync_audio)
                 self._audio_player.errorOccurred.connect(
                     lambda *_: self.status.setText("音轨预览失败：" +

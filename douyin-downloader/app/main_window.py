@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (QAbstractScrollArea, QApplication, QHBoxLayout,
 from qfluentwidgets import FluentIcon as FIF, FluentWindow, Theme, setTheme
 
 from . import __version__
+from .core.applog import get_logger
 from .core.config import Config
 from .core.downloader import DownloadManager
 from .view import design as D
@@ -40,17 +41,16 @@ from .view.setting_interface import SettingInterface
 from .view.task_interface import TaskInterface
 from .view.title_bar import AppTitleBar
 
-# 侧栏导航项：(图标, 文字, tooltip)
+log = get_logger("ui")
+
+# 顶部导航项：(图标, 文字, tooltip)
 _NAV_ITEMS = [
     (FIF.SEARCH, "视频解析", "粘贴分享链接，解析后选择清晰度下载"),
     (FIF.PEOPLE, "批量下载", "抓取作者主页的全部作品，勾选批量下载"),
     (FIF.DOWNLOAD, "下载任务", "队列进度、失败重试与运行日志"),
     (FIF.PHOTO, "漫画阅读器", "本地 JPG 文件夹书架与阅读进度"),
     (FIF.MOVIE, "本地视频", "下载完成的视频自动入库，记住播放位置接着看"),
-    (FIF.VIDEO, "WebP 转 MP4", "本地 WebP 动图批量转 MP4 / 顺序合并"),
-    (FIF.PHOTO, "MP4 转 GIF", "把视频片段转成循环 GIF，可批量处理"),
-    (FIF.ZOOM, "导出原始帧", "截取某一段时间，逐帧导出原始画面并立即回放"),
-    (FIF.SETTING, "设置", "下载行为、平台登录态与界面外观"),
+    (FIF.SETTING, "设置", "下载行为、平台登录态、工具与界面外观"),
 ]
 
 
@@ -95,6 +95,9 @@ class MainWindow(FluentWindow):
         super().__init__()
         self.config = config
         self._mica_enabled = False
+        # 启动时即对齐主题与强调色，避免构造各页面和控件时先按浅色/默认青色渲染再闪变。
+        D.apply_accent(config.get("accent_color", D.DEFAULT_ACCENT))
+        D.set_reduce_motion(bool(config.get("reduce_motion", False)))
         # 配置项已在 Config.load() 里收敛成合法 int；这里再兜一层，
         # 避免手工改坏 config.json 时 int() 抛 ValueError 让程序起不来。
         # （_safe_int 随 9ce9b0f 一并合入，见本文件顶部）
@@ -116,7 +119,7 @@ class MainWindow(FluentWindow):
 
         self.initNavigation()
         self.initWindow()
-        self._apply_theme()
+        self._apply_theme(immediate=True)
         self._wire_status_bar()
 
         # 启动即展示首页
@@ -143,9 +146,11 @@ class MainWindow(FluentWindow):
 
         self._pages = [self.homeInterface, self.batchInterface,
                        self.taskInterface, self.mangaInterface,
-                       self.videoInterface, self.converterInterface,
-                       self.gifInterface, self.framesInterface,
-                       self.settingInterface]
+                       self.videoInterface, self.settingInterface]
+        # 所有注册进 stackedWidget 的页面（含从「设置 → 工具」进入的子页面）
+        self._all_pages = self._pages + [self.converterInterface,
+                                         self.gifInterface,
+                                         self.framesInterface]
 
         # 顶部导航栏（TabBar 这个名字保留：外部与测试用它判断导航项数量 /
         # 主题按钮位置，语义仍是「导航栏」）
@@ -199,11 +204,17 @@ class MainWindow(FluentWindow):
 
     def _on_tab_changed(self, index: int):
         if 0 <= index < len(self._pages):
-            self.switchTo(self._pages[index])
+            target = self._pages[index]
+            if self.stackedWidget.currentWidget() is not target:
+                self.switchTo(target)
 
     def _sync_tab(self, index: int):
-        if 0 <= index < len(self._pages):
-            self.tabBar.set_current(index)
+        widget = self.stackedWidget.widget(index)
+        if widget in self._pages:
+            self.tabBar.set_current(self._pages.index(widget))
+        elif widget in (self.converterInterface, self.gifInterface, self.framesInterface):
+            # 从「设置 → 工具」打开的工具子页面，顶部栏保持高亮「设置」
+            self.tabBar.set_current(self._pages.index(self.settingInterface))
 
     def _toggle_theme(self):
         """侧栏底部的明暗切换（太阳 / 月亮图标按钮）"""
@@ -257,14 +268,18 @@ class MainWindow(FluentWindow):
         except Exception:  # noqa: BLE001 - 旧版 qfluentwidgets 没有这个 API
             pass
         # 页面底一律**透明**：底色与氛围光晕由主窗口的 paintEvent 统一画，
-        # 页面再铺一层不透明的 BG_PRIMARY 会把光晕整片盖掉（这是本轮改的关键：
-        # 画布属于窗口，不属于某一页，切页时光晕不会跟着跳）。
-        for itf in self._pages:
+        # 页面再铺一层不透明的 BG_PRIMARY 会把光晕整片盖掉。
+        # ScrollArea 本身的 viewport() 默认可能带有背景色，也必须显式透明。
+        for itf in self._all_pages:
             name = itf.objectName()
             D.theme_qss(itf,
                         f"#{name}{{background:transparent;border:none;}}",
                         f"#{name}{{background:transparent;border:none;}}")
-        # stackedWidget 默认给页面铺一层不透明底（FLUENT_WINDOW 样式），同样要透明
+            if isinstance(itf, QAbstractScrollArea) and itf.viewport() is not None:
+                itf.viewport().setStyleSheet("background: transparent; border: none;")
+        # stackedWidget 仅靠裸 setStyleSheet 会被 FLUENT_WINDOW 的 QSS 盖回半透明灰底，
+        # 必须显式标上 qfluentwidgets 约定的 isTransparent 属性。
+        self.stackedWidget.setProperty("isTransparent", True)
         self.stackedWidget.setStyleSheet("background: transparent; border: none;")
         # Mica 云母特效需要持续采样桌面做模糊合成，在部分机器上是滚动卡顿的主因。
         # 默认关闭，设置页可手动开启（见 setting_interface）。
@@ -398,11 +413,40 @@ class MainWindow(FluentWindow):
         self._apply_mica(enabled)
         self.config.set("mica_effect", bool(enabled))
 
-    def _apply_theme(self):
+    def _sync_background_immediately(self):
+        """在启动或关闭动效时直接落定背景色，避免 backgroundColorAni 停在中间灰态。"""
+        ani = getattr(self, "backgroundColorAni", None)
+        normal = getattr(self, "_normalBackgroundColor", None)
+        if ani is not None and callable(normal):
+            ani.stop()
+            target = normal()
+            if hasattr(self, "setBackgroundColor"):
+                self.setBackgroundColor(target)
+
+    def _apply_theme(self, immediate: bool = False):
         key = self.config.get("theme", D.DEFAULT_THEME)
         theme = {"dark": Theme.DARK, "light": Theme.LIGHT,
                  "auto": Theme.AUTO}.get(key, Theme.LIGHT)
-        setTheme(theme)
+        # qfluentwidgets 的 setTheme 要遍历全局弱引用表；若某个控件恰好在此时被回收，
+        # 会抛 "dictionary changed size during iteration"（实测跑完整套 UI 回归时偶发）。
+        # 这不是我们的状态错误，重试一次即可避开这个回收竞态。
+        for attempt in range(2):
+            try:
+                setTheme(theme)
+                break
+            except RuntimeError:
+                if attempt:
+                    raise
+                log.warning("应用主题遇到控件回收竞态，重试一次", exc_info=True)
+        # 注意：test_theme_resilience.py 会用 SimpleNamespace 直接调用本方法，
+        # 窗口级背景刷新必须先判断属性存在。
+        if hasattr(self, "setCustomBackgroundColor"):
+            try:
+                self.setCustomBackgroundColor(*D.BG_PRIMARY)
+            except Exception:  # noqa: BLE001
+                pass
+            if immediate or D.reduce_motion():
+                self._sync_background_immediately()
         combo = self.settingInterface.themeCombo
         blocked = combo.blockSignals(True)
         combo.setCurrentIndex({"dark": 0, "light": 1, "auto": 2}.get(key, 0))

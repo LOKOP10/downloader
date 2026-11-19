@@ -60,11 +60,12 @@ class TaskRefreshPerfTest(unittest.TestCase):
 
     def add_task(self, status="等待中"):
         number = len(self.manager.all_tasks())
-        info = self.manager.add("https://example.invalid/video.mp4",
-                                str(self.root / (str(number) + ".mp4")), str(number))
-        if status != info.status:
-            info.status = status
-            self.manager.task_progress.emit(info)
+        snapshot = self.manager.add("https://example.invalid/video.mp4",
+                                    str(self.root / (str(number) + ".mp4")), str(number))
+        # 仅测试夹具持有内部对象；生产调用方使用 add 返回的独立快照。
+        info = self.manager._tasks[snapshot.task_id]
+        if status != snapshot.status:
+            self.manager._update_task(info, signal=self.manager.task_progress, status=status)
             self.ui._throttle.flush_now()
         return info
 
@@ -75,12 +76,11 @@ class TaskRefreshPerfTest(unittest.TestCase):
 
     def test_progress_burst_updates_cells_without_scanning_tasks(self):
         info = self.add_task()
-        info.total = 1000
+        self.manager._update_task(info, total=1000)
         with patch.object(self.manager, "all_tasks", wraps=self.manager.all_tasks) as all_tasks, patch.object(self.ui, "_refresh_summary", wraps=self.ui._refresh_summary) as summary:
             for downloaded in range(1, 201):
-                info.downloaded = downloaded
-                info.speed = downloaded * 1024
-                self.manager.task_progress.emit(info)
+                self.manager._update_task(info, signal=self.manager.task_progress,
+                                          downloaded=downloaded, speed=downloaded * 1024)
             self.ui._throttle.flush_now()
             all_tasks.assert_not_called()
             summary.assert_not_called()
@@ -95,10 +95,9 @@ class TaskRefreshPerfTest(unittest.TestCase):
         self.ui.filterTabs.set_current(1, emit=True)
         for status in ("下载中", "合并中", "转换中", "已完成", "失败", "已取消"):
             with self.subTest(status=status):
-                info.status = status
                 with patch.object(self.ui, "_refresh_summary", wraps=self.ui._refresh_summary) as summary:
-                    self.manager.task_progress.emit(info)
-                    self.manager.task_finished.emit(info)
+                    self.manager._update_task(info, signal=self.manager.task_progress, status=status)
+                    self.manager._update_task(info, signal=self.manager.task_finished)
                     self.ui._throttle.flush_now()
                     summary.assert_called_once_with()
                 active = status in ("下载中", "合并中", "转换中")

@@ -55,6 +55,11 @@ if (Test-Path -LiteralPath $target) {
     $subdirs = @(Get-ChildItem -LiteralPath $target -Directory -Force -ErrorAction SilentlyContinue)
     foreach ($sd in $subdirs) {
         if (Test-Path -LiteralPath (Join-Path $sd.FullName $exeName)) {
+            $destInternal = Join-Path $target '_internal'
+            $srcInternal = Join-Path $sd.FullName '_internal'
+            if ((Test-Path -LiteralPath $destInternal) -and (Test-Path -LiteralPath $srcInternal)) {
+                Remove-Item -LiteralPath $destInternal -Recurse -Force
+            }
             Get-ChildItem -LiteralPath $sd.FullName -Force | Move-Item -Destination $target -Force
             Remove-Item -LiteralPath $sd.FullName -Recurse -Force
             Write-Output ('flattened: ' + $sd.Name + ' -> ' + $version)

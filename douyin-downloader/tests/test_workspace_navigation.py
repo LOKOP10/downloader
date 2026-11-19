@@ -58,21 +58,21 @@ class WorkspaceNavigationTest(unittest.TestCase):
         self.assertIs(self.window.stackedWidget.view.currentWidget(),
                       self.window.homeInterface)
 
-    def test_arrows_home_and_end_switch_all_nine_pages(self):
+    def test_arrows_home_and_end_switch_all_six_pages(self):
         bar = self.window.tabBar
-        self.assertEqual(len(bar.items), 9)
+        self.assertEqual(len(bar.items), 6)
         bar.items[0].setFocus()
-        for index in range(1, 9):
+        for index in range(1, 6):
             QTest.keyClick(bar.items[index - 1], Qt.Key.Key_Right)
             self.assert_page(index)
-        QTest.keyClick(bar.items[8], Qt.Key.Key_Right)
+        QTest.keyClick(bar.items[5], Qt.Key.Key_Right)
         self.assert_page(0)
         QTest.keyClick(bar.items[0], Qt.Key.Key_Left)
-        self.assert_page(8)
-        QTest.keyClick(bar.items[8], Qt.Key.Key_Home)
+        self.assert_page(5)
+        QTest.keyClick(bar.items[5], Qt.Key.Key_Home)
         self.assert_page(0)
         QTest.keyClick(bar.items[0], Qt.Key.Key_End)
-        self.assert_page(8)
+        self.assert_page(5)
 
     def test_enter_and_space_activate_focused_page(self):
         for index, key in ((3, Qt.Key.Key_Return), (4, Qt.Key.Key_Space)):
@@ -179,6 +179,50 @@ class WorkspaceNavigationTest(unittest.TestCase):
         icon_rect = rectangles[0]
         self.assertEqual(icon_rect.size().width(), 16)
         self.assertEqual(icon_rect.center(), button.rect().center())
+
+    def test_converter_tools_moved_to_settings(self):
+        names = [item.accessibleName() for item in self.window.tabBar.items]
+        self.assertNotIn("WebP 转 MP4", names)
+        self.assertNotIn("MP4 转 GIF", names)
+        self.assertNotIn("导出原始帧", names)
+        self.assertEqual(len(names), 6)
+
+        settings_idx = self.window._pages.index(self.window.settingInterface)
+        self.window.switchTo(self.window.settingInterface)
+        self.app.processEvents()
+
+        # 从设置页打开 WebP 转 MP4，顶栏仍高亮「设置」，点返回按钮回到设置页
+        self.window.settingInterface.webpBtn.click()
+        self.app.processEvents()
+        self.assertIs(self.window.stackedWidget.currentWidget(),
+                      self.window.converterInterface)
+        self.assertTrue(self.window.tabBar.items[settings_idx]._active)
+        self.window.converterInterface.backBtn.click()
+        self.app.processEvents()
+        self.assertIs(self.window.stackedWidget.currentWidget(),
+                      self.window.settingInterface)
+
+        # 从设置页打开 MP4 转 GIF，点击顶栏「设置」Tab 也能回到设置页
+        self.window.settingInterface.gifBtn.click()
+        self.app.processEvents()
+        self.assertIs(self.window.stackedWidget.currentWidget(),
+                      self.window.gifInterface)
+        self.assertTrue(self.window.tabBar.items[settings_idx]._active)
+        QTest.mouseClick(self.window.tabBar.items[settings_idx], Qt.MouseButton.LeftButton)
+        self.app.processEvents()
+        self.assertIs(self.window.stackedWidget.currentWidget(),
+                      self.window.settingInterface)
+
+        # 从设置页打开导出原始帧，顶栏高亮「设置」，点返回按钮回到设置页
+        self.window.settingInterface.framesBtn.click()
+        self.app.processEvents()
+        self.assertIs(self.window.stackedWidget.currentWidget(),
+                      self.window.framesInterface)
+        self.assertTrue(self.window.tabBar.items[settings_idx]._active)
+        self.window.framesInterface.backBtn.click()
+        self.app.processEvents()
+        self.assertIs(self.window.stackedWidget.currentWidget(),
+                      self.window.settingInterface)
 
 
 if __name__ == "__main__":

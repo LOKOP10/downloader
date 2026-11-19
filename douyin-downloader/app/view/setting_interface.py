@@ -90,6 +90,7 @@ _NAME_OF = {spec[0]: spec[2] for spec in _PLATFORM_SPECS}
 
 # 右侧控件统一宽度：设置行的"控件边界"对齐后才能竖着扫读
 _CTRL_W = 132
+_BTN_W = 104
 
 
 class SettingInterface(ScrollArea):
@@ -105,13 +106,14 @@ class SettingInterface(ScrollArea):
         self.view = QWidget(self)
         self.view.setObjectName("settingView")
         self.setWidget(self.view)
-        self.vBox = W.page_body(self.view, pad=24, spacing=14)
+        self.vBox = W.page_body(self.view)
 
         self.vBox.addWidget(W.PageHeading(
             "设置",
             "下载行为、平台登录态与界面外观，全部即时生效，不需要重启。",
             self.view))
         self._build_download_group()
+        self._build_tools_group()
         self._build_account_group()
         self._build_personal_group()
         self._build_about_group()
@@ -119,18 +121,29 @@ class SettingInterface(ScrollArea):
         self.view.setStyleSheet("QWidget#settingView { background: transparent; }")
 
     # ------------------------------------------------------------------ #
-    def _group(self, title: str, meta: str = "") -> W.Panel:
-        """分组面板：标题行 + 一组设置行（行与行之间只有一条分隔线）"""
-        panel = W.Panel(self.view, padding=(16, 10, 16, 6), spacing=0)
+    def _group(self, title: str, meta: str = "", icon=None) -> W.Panel:
+        """分组面板：标题行 + 分隔线 + 一组设置行（末行无底线）"""
+        panel = W.Panel(self.view, padding=(18, 14, 18, 8), spacing=0)
         head = W.PanelTitle(title, panel, note=meta)
+        if icon is not None:
+            badge = W.RowIcon(icon, head, 20, 15)
+            head.row.insertWidget(0, badge)
         panel.body.addWidget(head)
-        panel.body.addSpacing(4)
+        panel.body.addSpacing(8)
+        panel.body.addWidget(W.Divider(panel))
+        panel._last_row = None
         self.vBox.addWidget(panel)
         return panel
 
     def _row(self, panel: W.Panel, title: str, desc: str, control=None,
              icon=None) -> W.SettingRow:
+        if isinstance(control, PushButton):
+            control.setFixedWidth(_BTN_W)
         row = W.SettingRow(title, desc, panel, control=control, icon=icon)
+        if getattr(panel, "_last_row", None) is not None:
+            panel._last_row.set_divider(True)
+        row.set_divider(False)
+        panel._last_row = row
         panel.body.addWidget(row)
         return row
 
@@ -149,7 +162,7 @@ class SettingInterface(ScrollArea):
 
     def _build_download_group(self):
         cfg = self.ctx.config
-        panel = self._group("下载", "保存位置、命名与并发")
+        panel = self._group("下载", "保存位置、命名与并发", icon=FIF.DOWNLOAD)
 
         self.folderBtn = PushButton("选择文件夹", panel)
         self.folderBtn.clicked.connect(self._on_choose_folder)
@@ -279,16 +292,54 @@ class SettingInterface(ScrollArea):
                           position=InfoBarPosition.TOP, duration=5000, parent=self)
 
     # ------------------------------------------------------------------ #
+    def _build_tools_group(self):
+        """工具：本地媒体格式转换（从顶部栏收纳进设置页）"""
+        panel = self._group("工具", "本地媒体格式转换，不联网、不上传",
+                            icon=FIF.APPLICATION)
+
+        self.webpBtn = PushButton("打开", panel)
+        self.webpBtn.clicked.connect(lambda: self._open_tool("converterInterface"))
+        self._row(
+            panel, "WebP 转 MP4",
+            "本地 WebP 动图批量转 MP4 / 顺序合并",
+            control=self.webpBtn, icon=FIF.VIDEO)
+
+        self.gifBtn = PushButton("打开", panel)
+        self.gifBtn.clicked.connect(lambda: self._open_tool("gifInterface"))
+        self._row(
+            panel, "MP4 转 GIF",
+            "把视频片段转成循环 GIF，可批量处理",
+            control=self.gifBtn, icon=FIF.PHOTO)
+
+        self.framesBtn = PushButton("打开", panel)
+        self.framesBtn.clicked.connect(lambda: self._open_tool("framesInterface"))
+        self._row(
+            panel, "导出原始帧",
+            "截取某一段时间，逐帧导出原始画面并立即回放",
+            control=self.framesBtn, icon=FIF.ZOOM)
+
+    def _open_tool(self, attr: str):
+        win = self.window()
+        page = getattr(win, attr, None)
+        if page is not None and hasattr(win, "switchTo"):
+            win.switchTo(page)
+
+    # ------------------------------------------------------------------ #
     def _build_account_group(self):
         """账号与登录：一行 = 一个平台，右侧是真实登录态 + 两个入口"""
         panel = self._group("账号与登录",
-                            "登录态存在本地；「网页登录」会自动保存，不用手动抄 Cookie")
+                            "登录态存在本地；「网页登录」会自动保存，不用手动抄 Cookie",
+                            icon=FIF.PEOPLE)
+        last_row = None
         for key, icon, name, desc, cfg_key, token, profile_attr in _PLATFORM_SPECS:
             row = AccountRow(icon, name, desc, panel)
             row.loginRequested.connect(lambda k=key: self._on_login(k))
             row.cookieRequested.connect(lambda k=key: self._on_config_cookie(k))
             panel.body.addWidget(row)
             self.accountCards[key] = (row, cfg_key, token, profile_attr)
+            last_row = row
+        if last_row is not None:
+            last_row.set_divider(False)
         self._refresh_account_state()
 
     # ------------------------------------------------------------------ #
@@ -380,14 +431,15 @@ class SettingInterface(ScrollArea):
     # ------------------------------------------------------------------ #
     def _build_personal_group(self):
         cfg = self.ctx.config
-        panel = self._group("外观与动效", "只影响界面，不影响下载行为")
+        panel = self._group("外观与动效", "只影响界面，不影响下载行为", icon=FIF.BRUSH)
 
         self.themeCombo = ComboBox(panel)
         self.themeCombo.setFixedWidth(_CTRL_W)
         self.themeCombo.addItems(["深色", "浅色", "跟随系统"])
         theme_map = {"dark": 0, "light": 1, "auto": 2}
         theme_keys = ["dark", "light", "auto"]
-        self.themeCombo.setCurrentIndex(theme_map.get(cfg.get("theme"), 0))
+        self.themeCombo.setCurrentIndex(
+            theme_map.get(cfg.get("theme"), theme_map.get(D.DEFAULT_THEME, 0)))
         self.themeCombo.currentIndexChanged.connect(
             lambda i: self._on_theme_changed(theme_keys[i]))
         self._row(panel, "应用主题", "深色 / 浅色 / 跟随系统；侧栏底部也能一键切换",
@@ -444,13 +496,13 @@ class SettingInterface(ScrollArea):
     def _build_about_group(self):
         from .. import __version__
         from ..core.applog import log_path
-        panel = self._group("关于", "版本、日志与致谢")
+        panel = self._group("关于", "版本、日志与致谢", icon=FIF.INFO)
 
-        versionRow = W.SettingRow(
+        self._row(
+            panel,
             f"视频下载器 v{__version__}",
             "个人自用的多站点下载工具：链接解析、去水印、批量下载、本地漫画书架",
-            panel, icon=FIF.INFO)
-        panel.body.addWidget(versionRow)
+            icon=FIF.INFO)
 
         self.logBtn = PushButton("打开文件夹", panel)
         self.logBtn.clicked.connect(self._on_open_log)
@@ -551,6 +603,10 @@ class SettingInterface(ScrollArea):
 
     def _on_theme_changed(self, key: str):
         self.ctx.config.set("theme", key)
+        win = self.window()
+        if hasattr(win, "_apply_theme"):
+            win._apply_theme()
+            return
         theme = {"dark": Theme.DARK, "light": Theme.LIGHT,
                  "auto": Theme.AUTO}[key]
         setTheme(theme)

@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QFormLayout,
                                QHBoxLayout, QListWidget, QListWidgetItem,
                                QProgressBar, QSizePolicy, QWidget)
 from qfluentwidgets import (CheckBox, ComboBox, FluentIcon as FIF, LineEdit,
-                            ListWidget, PrimaryPushButton, PushButton, ScrollArea,
+                            ListWidget, PushButton, ScrollArea,
                             TransparentToolButton)
 
 from ..core.ffmpeg import ffmpeg_path
@@ -83,21 +83,26 @@ class GifInterface(ScrollArea):
         self.setWidget(self.content)
         D.theme_qss(self.content, "QWidget#gifContent{background:transparent;}",
                     "QWidget#gifContent{background:transparent;}")
-        layout = W.page_body(self.content, pad=24, spacing=12)
-        layout.addWidget(W.PageHeading(
+        layout = W.page_body(self.content)
+        heading = W.PageHeading(
             "MP4 转 GIF",
             "本地完成，不联网、不上传：把视频片段转成循环 GIF，可批量处理。",
-            self.content))
+            self.content)
+        self.backBtn = PushButton(FIF.RETURN, "返回设置", heading)
+        self.backBtn.clicked.connect(self._back_to_settings)
+        heading.layout().addWidget(
+            self.backBtn, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(heading)
 
         columns = QHBoxLayout()
-        columns.setSpacing(12)
+        columns.setSpacing(D.GAP_MD)
 
         # ---------------- 左：输入队列 ----------------
-        left = W.Panel(self.content, padding=(16, 12, 16, 12), spacing=10)
+        left = W.Panel(self.content, padding=(16, 14, 16, 14), spacing=10)
         left.body.addWidget(W.PanelTitle("输入队列", left, note="逐个转换，不合并"))
         toolbar = QHBoxLayout()
         toolbar.setSpacing(D.GAP_XS)
-        self.addBtn = PrimaryPushButton(FIF.ADD, "添加 MP4", left)
+        self.addBtn = PushButton(FIF.ADD, "添加 MP4", left)
         self.addBtn.setToolTip("选择 MP4 文件（支持多选）")
         self.removeBtn = TransparentToolButton(FIF.DELETE, left)
         self.removeBtn.setToolTip("移除选中项（不删除源文件）")
@@ -122,14 +127,15 @@ class GifInterface(ScrollArea):
         columns.addWidget(left, 1)
 
         # ---------------- 右：转换设置 ----------------
-        right = W.Panel(self.content, padding=(16, 12, 16, 12), spacing=10)
+        right = W.Panel(self.content, padding=(16, 14, 16, 14), spacing=10)
         self.editPanel = right
         right.body.addWidget(W.PanelTitle("转换设置", right))
+        right.body.addWidget(W.Divider(right))
 
         form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(D.GAP_MD)
-        form.setVerticalSpacing(8)
+        form.setContentsMargins(0, 2, 0, 0)
+        form.setHorizontalSpacing(D.GAP_LG)
+        form.setVerticalSpacing(9)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.fpsCombo = ComboBox(right)
@@ -197,7 +203,7 @@ class GifInterface(ScrollArea):
                              QSizePolicy.Policy.Maximum)
         actions = QHBoxLayout()
         actions.setSpacing(D.GAP_SM)
-        self.startBtn = PrimaryPushButton(FIF.PLAY, "开始转换", result)
+        self.startBtn = W.PrimaryButton(FIF.PLAY, "开始转换", result)
         self.cancelBtn = PushButton(FIF.CLOSE, "取消", result)
         self.cancelBtn.setEnabled(False)
         self.openBtn = PushButton(FIF.FOLDER, "打开输出目录", result)
@@ -213,13 +219,7 @@ class GifInterface(ScrollArea):
                                         D.FONT_CAPTION, wrap=True)
         result.body.addWidget(self.statusLabel)
         self.progressBar = QProgressBar(result)
-        self.progressBar.setTextVisible(False)
-        self.progressBar.setFixedHeight(4)
-        D.theme_qss(self.progressBar,
-                    "QProgressBar{border:0;border-radius:2px;background:#E4E4E7;}"
-                    "QProgressBar::chunk{background:#009faa;border-radius:2px;}",
-                    "QProgressBar{border:0;border-radius:2px;background:#27272A;}"
-                    "QProgressBar::chunk{background:#009faa;border-radius:2px;}")
+        D.style_progress_bar(self.progressBar)
         self.progressBar.setRange(0, 1)
         self.progressBar.setValue(0)
         result.body.addWidget(self.progressBar)
@@ -474,6 +474,12 @@ class GifInterface(ScrollArea):
         self.startBtn.setEnabled(False)
         self.cancelBtn.setEnabled(False)
         self.editPanel.setEnabled(False)
+
+    def _back_to_settings(self):
+        win = self.window()
+        page = getattr(win, "settingInterface", None)
+        if page is not None and hasattr(win, "switchTo"):
+            win.switchTo(page)
 
     def closeEvent(self, event):
         self.shutdown()

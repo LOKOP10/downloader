@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPainterPath, QPix
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QListView,
                                QListWidget, QListWidgetItem, QMenu, QMessageBox,
                                QStyle, QStyledItemDelegate, QWidget)
-from qfluentwidgets import ComboBox, FluentIcon as FIF, PrimaryPushButton, PushButton, SearchLineEdit
+from qfluentwidgets import ComboBox, FluentIcon as FIF, PushButton, SearchLineEdit
 from qfluentwidgets.common.style_sheet import isDarkTheme
 
 from ..core.manga import MangaLibrary, discover_books, folder_key, is_page, natural_key, scan_pages
@@ -25,9 +25,14 @@ class _CoverDelegate(QStyledItemDelegate):
         dark = isDarkTheme()
         primary = QColor(D.TEXT_PRIMARY[int(dark)])
         muted = QColor(D.TEXT_SECONDARY[int(dark)])
+        tertiary = QColor(D.TEXT_TERTIARY[int(dark)])
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(option.rect).adjusted(8, 8, -8, -8)
+        if option.state & QStyle.StateFlag.State_MouseOver:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(D.SURFACE_HI[int(dark)]))
+            painter.drawRoundedRect(rect.adjusted(-4, -4, 4, 4), 12, 12)
         cover_rect = QRectF(rect.left(), rect.top(), rect.width(), 218)
         clip = QPainterPath()
         clip.addRoundedRect(cover_rect, 10, 10)
@@ -61,7 +66,7 @@ class _CoverDelegate(QStyledItemDelegate):
         painter.setFont(D.font(14, D.W_SEMI))
         title = painter.fontMetrics().elidedText(book.title, Qt.TextElideMode.ElideRight, int(rect.width()))
         painter.drawText(QRectF(rect.left(), rect.top() + 230, rect.width(), 24), title)
-        painter.setPen(muted)
+        painter.setPen(tertiary)
         painter.setFont(D.font(11))
         progress = f"读到第 {book.page_index + 1} 页" if book.last_read else "还没开始阅读"
         painter.drawText(QRectF(rect.left(), rect.top() + 258, rect.width(), 20), progress)
@@ -92,7 +97,7 @@ class MangaInterface(QWidget):
         self._covers = {}
         self._cover_pending = set()
         self._cover_generation = 0
-        layout = W.page_body(self, pad=24, spacing=12)
+        layout = W.page_body(self)
         header = QHBoxLayout()
         header.setSpacing(D.GAP_SM)
         self.heading = W.PageHeading(
@@ -109,7 +114,7 @@ class MangaInterface(QWidget):
         self.libraryBtn = PushButton(FIF.FOLDER, "导入漫画库", self)
         self.libraryBtn.setToolTip("选择总目录，每个子文件夹作为一本漫画")
         self.libraryBtn.clicked.connect(self._choose_library)
-        self.addBtn = PrimaryPushButton(FIF.ADD, "添加漫画", self)
+        self.addBtn = W.PrimaryButton(FIF.ADD, "添加漫画", self)
         self.addBtn.setToolTip("选择一本漫画的文件夹（每张 JPG / JPEG 是一页）")
         self.addBtn.clicked.connect(self._choose_book)
         for btn in (self.refreshBtn, self.moreBtn, self.libraryBtn, self.addBtn):
@@ -155,10 +160,11 @@ class MangaInterface(QWidget):
         D.theme_qss(self.shelf, "QListWidget{background:transparent;border:0;}",
                     "QListWidget{background:transparent;border:0;}")
         panel.body.addWidget(self.shelf, 1)
-        self.empty = D.caption("", self)
-        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty.setWordWrap(True)
-        self.empty.setMinimumHeight(180)
+        self.empty = W.EmptyState(
+            FIF.PHOTO, "从一个文件夹开始阅读",
+            "点击「添加漫画」，或把漫画文件夹拖到这里；一个文件夹一本，支持章节子目录。",
+            self)
+        self.empty.setMinimumHeight(220)
         panel.body.addWidget(self.empty, 1)
         self.status = D.hint_label("本地阅读 · 原图片不变 · 右键封面可收藏或移除记录", self)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
@@ -279,8 +285,12 @@ class MangaInterface(QWidget):
             self._load_cover(book)
         self.shelf.setVisible(bool(books))
         self.empty.setVisible(not books)
-        self.empty.setText("没有匹配的漫画。试试其他关键词或分类。" if self.library.books
-                           else "从一个文件夹开始阅读\n\n点击「添加漫画」，或把漫画文件夹拖到这里。\n一个文件夹一本漫画，每张 JPG 是一页；支持章节子目录。")
+        if self.library.books:
+            self.empty.set_text("没有匹配的漫画", "试试其他关键词或切换上方筛选条件。")
+        else:
+            self.empty.set_text(
+                "从一个文件夹开始阅读",
+                "点击「添加漫画」，或把漫画文件夹拖到这里；一个文件夹一本，支持章节子目录。")
 
     def _load_cover(self, book):
         key = folder_key(book.folder)

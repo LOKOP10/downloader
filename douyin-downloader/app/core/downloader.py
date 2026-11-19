@@ -12,8 +12,10 @@ import requests
 from PySide6.QtCore import QObject, Signal
 
 from .applog import get_logger
-from .domain import needs_cookie_for_url, referer_for
+from .domain import needs_cookie_for_url
+from .http_headers import HEADERS, headers_for
 from .models import DownloadTaskInfo, clean_cookie
+from .task_events import TaskEventBus
 
 log = get_logger("download")
 
@@ -45,12 +47,6 @@ CHUNK_SLOW_RATIO = 0.30                # 慢于全场最快连接的这个比例
 CHUNK_MIN_REMAINING_TIME = 4.0         # 按当前速度很快能下完时，省去重连开销
 CHUNK_MAX_ATTEMPTS = 4                 # 同一分块最多重排几次（防死循环）
 ABANDON_MIN_BUDGET = 8                 # 放弃重排的总次数预算下限
-
-HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
-    "Referer": "https://www.douyin.com/",
-}
 
 
 # 一个下载任务会用到的全部落点后缀（空串表示最终文件自身）。
@@ -177,13 +173,6 @@ def signed_url_expired(url: str, ttl: int = SIGNED_URL_TTL_SECONDS) -> bool:
     return (time.time() - issued) > ttl
 
 
-def headers_for(url: str) -> dict:
-    """按目标域名设置正确的 Referer（外站 Referer 会被 CDN 403）"""
-    headers = dict(HEADERS)
-    headers["Referer"] = referer_for(url)
-    return headers
-
-
 def content_range_total(value: str) -> int:
     """从 Content-Range（`bytes 100-999/1000`）里解析资源总长度，失败返回 0"""
     if not value or "/" not in value:
@@ -249,7 +238,14 @@ def _should_reconnect_slow_chunk(got: int, length: int, elapsed: float,
 
 
 class DownloadManager(QObject):
-    """下载队列管理器。所有信号都在 UI 线程接收（QueuedConnection）"""
+    """队列及任务状态的所有者。公开查询、add 返回值和信号均交付独立字段快照。
+
+    _lock 保护任务字段事务与集合查询：一次 all_tasks 的全部字段取自同一临界区。
+    写入先取 _publish_lock 再取 _lock，网络、文件处理、转码和 Qt 发信号都不占
+    _lock。通知的入队与发送由 TaskEventBus（task_events.py）负责：按事务产生顺序
+    排队，同线程槽内取消/重试产生的新通知延后发送，Qt QueuedConnection 接收方
+    因此按发布顺序收到稳定的历史值。
+    """
     task_added = Signal(object)                       # DownloadTaskInfo
     task_progress = Signal(object)                    # DownloadTaskInfo
     task_finished = Signal(object)                    # DownloadTaskInfo
@@ -270,8 +266,38 @@ class DownloadManager(QObject):
         self._queue = []
         self._active = 0
         self._lock = threading.Lock()
+        self._publish_lock = threading.RLock()
+        self._events = TaskEventBus()
         self._watchdog = None     # 卡住检测线程（第一次入队时启动）
         self._stall_seen = {}     # task_id -> (字节数, 该字节数最后一次变化的时间)
+
+    def _drain_notifications(self):
+        """按事务入队顺序发通知；分派期间不持任何管理器锁。"""
+        self._events.drain()
+
+    def _update_task(self, info, *, signal=None, **changes):
+        """一组相关字段和快照在同一状态锁内提交，通知在锁外按顺序发出。"""
+        with self._publish_lock:
+            with self._lock:
+                for name, value in changes.items():
+                    setattr(info, name, value)
+                snapshot = info.snapshot()
+            if signal is not None:
+                self._events.enqueue(signal, snapshot)
+        if signal is not None:
+            self._drain_notifications()
+        return snapshot
+
+    def _finish_task(self, info):
+        with self._publish_lock:
+            with self._lock:
+                info.speed = 0
+                self._active -= 1
+                self._cancel_flags.pop(info.task_id, None)
+                # Cookie 和候选地址保留到删除记录；完成通知前允许按 ID 重试。
+                snapshot = info.snapshot()
+            self._events.enqueue(self.task_finished, snapshot)
+        self._drain_notifications()
 
     # ------------------------------------------------------------------ #
     def add(self, url: str, save_path: str, name: str,
@@ -282,29 +308,32 @@ class DownloadManager(QObject):
             cover_url: str = "",
             convert_to_gif: bool = False,
             gif_path: str = "") -> DownloadTaskInfo:
-        save_path = self._unique_path(save_path)
-        gif_path = self._unique_path(gif_path) if gif_path else ""
-        info = DownloadTaskInfo(task_id=uuid.uuid4().hex[:12], url=url,
-                                save_path=save_path, name=name,
-                                quality=quality or "",
-                                cover_url=cover_url or "",
-                                convert_to_gif=bool(convert_to_gif),
-                                gif_path=gif_path)
         plan = self._build_plan(url, fallbacks, audio_url, audio_map,
                                 url_backups, audio_backups)
-        with self._lock:
-            self._tasks[info.task_id] = info
-            self._cookies[info.task_id] = cookies or ""
-            self._plans[info.task_id] = plan
-            self._queue.append(info.task_id)
-        log.info("入队 %s | %s | 画质=%s | 候选=%d | 音频轨=%s | 保存到 %s",
-                 info.task_id, url, quality or "-",
-                 len(plan),
-                 "有" if audio_url else "无", save_path)
-        self.task_added.emit(info)
+        with self._publish_lock:
+            save_path = self._unique_path(save_path)
+            gif_path = self._unique_path(gif_path) if gif_path else ""
+            info = DownloadTaskInfo(task_id=uuid.uuid4().hex[:12], url=url,
+                                    save_path=save_path, name=name,
+                                    quality=quality or "",
+                                    cover_url=cover_url or "",
+                                    convert_to_gif=bool(convert_to_gif),
+                                    gif_path=gif_path)
+            with self._lock:
+                self._tasks[info.task_id] = info
+                self._cookies[info.task_id] = cookies or ""
+                self._plans[info.task_id] = plan
+                self._queue.append(info.task_id)
+                snapshot = info.snapshot()
+            log.info("入队 %s | %s | 画质=%s | 候选=%d | 音频轨=%s | 保存到 %s",
+                     info.task_id, url, quality or "-",
+                     len(plan),
+                     "有" if audio_url else "无", save_path)
+            self._events.enqueue(self.task_added, snapshot.snapshot())
+        self._drain_notifications()
         self._ensure_watchdog()
         self._pump()
-        return info
+        return snapshot
 
     @staticmethod
     def _build_plan(url: str, fallbacks, audio_url: str, audio_map: dict,
@@ -361,16 +390,28 @@ class DownloadManager(QObject):
                        for t in self._tasks.values())
 
     def cancel(self, task_id: str):
-        with self._lock:
-            flag = self._cancel_flags.get(task_id)
-            info = self._tasks.get(task_id)
-            if flag:
-                flag.set()
-            elif info and info.status == "等待中":
-                info.status = "已取消"
-                if task_id in self._queue:
-                    self._queue.remove(task_id)
-                self.task_progress.emit(info)
+        self._cancel_task(task_id)
+
+    def _cancel_task(self, task_id):
+        with self._publish_lock:
+            notifications = []
+            with self._lock:
+                info = self._tasks.get(task_id)
+                if info is None or info.status not in ("等待中", "下载中", "合并中", "转换中"):
+                    return False
+                flag = self._cancel_flags.get(task_id)
+                if flag is not None:
+                    flag.set()
+                elif info.status == "等待中":
+                    info.status = "已取消"
+                    if task_id in self._queue:
+                        self._queue.remove(task_id)
+                    notifications.append((self.task_progress, info.snapshot()))
+                else:
+                    return False
+            self._events.enqueue_many(notifications)
+        self._drain_notifications()
+        return True
 
     def retry(self, task_id: str, rebase_to: str = ""):
         """重试一个失败/已取消的任务。
@@ -380,35 +421,13 @@ class DownloadManager(QObject):
         否则 save_path 是任务创建时就固定的，永远写回旧目录，
         表现就是「目录改了但重试还下到老地方」（实测复现于失败任务的批量重试）。
         """
-        rebase_target = ""
-        with self._lock:
-            info = self._tasks.get(task_id)
-            if (not info or info.status not in self.FINISHED_STATUS
-                    or task_id in self._cancel_flags):
-                return
-            if rebase_to:
-                candidate = os.path.join(rebase_to, os.path.basename(info.save_path))
-                # 只有真正换了目录才动 save_path；同目录重试保持原样，
-                # 避免把历史任务的路径语义改掉（图集依赖它定位文件夹）。
-                if os.path.dirname(os.path.abspath(candidate)) != \
-                        os.path.dirname(os.path.abspath(info.save_path)):
-                    # ⚠️ 不能在这里调 _unique_path：它经 _path_in_use 会再取一次
-                    # self._lock，而 threading.Lock 不可重入 → 死锁。
-                    rebase_target = candidate
-            info.status = "等待中"
-            info.error = ""
-            info.downloaded = 0
-            info.speed = 0
-            self._queue.append(task_id)
-        if rebase_target:
-            info.save_path = self._unique_path(rebase_target)
-            log.info("重试 %s 改为新目录：%s", task_id, info.save_path)
-        self.task_progress.emit(info)
-        self._pump()
+        if self._retry_tasks([task_id], self.FINISHED_STATUS, rebase_to):
+            self._pump()
 
     def all_tasks(self):
+        """在一次状态锁内取得全部任务的独立字段快照，返回顺序仍为入队顺序。"""
         with self._lock:
-            return list(self._tasks.values())
+            return [info.snapshot() for info in self._tasks.values()]
 
     # 已结束（不会再有进度更新）的状态集合
     FINISHED_STATUS = ("已完成", "已取消", "失败")
@@ -419,57 +438,68 @@ class DownloadManager(QObject):
     STALL_CHECK_INTERVAL = 15
 
     def finished_tasks(self, statuses=FINISHED_STATUS):
-        """已结束的任务（用于「清空已完成」等操作）"""
+        """文件处理与收尾已完成、活动标记已释放的终态任务快照。
+
+        活动标记仍在的任务不返回：此时工作线程可能还在清理产物，不能提前删除或重试。
+        """
         with self._lock:
-            return [t for t in self._tasks.values() if t.status in statuses]
+            return [info.snapshot() for info in self._tasks.values()
+                    if info.status in statuses and info.task_id not in self._cancel_flags]
 
     def retry_tasks(self, tasks=None, rebase_to: str = ""):
         """批量重试；tasks 为空时重试所有失败任务。返回实际重试的任务数
 
         `rebase_to` 语义见 [retry]：把任务重新挂到当前下载目录下。
         """
-        with self._lock:
-            targets = [t for t in (tasks if tasks is not None
-                                   else self._tasks.values())
-                       if t.status == "失败" and t.task_id not in self._cancel_flags]
-            pending = []
-            for t in targets:
-                if rebase_to:
-                    new_path = os.path.join(rebase_to, os.path.basename(t.save_path))
-                    if os.path.dirname(os.path.abspath(new_path)) != \
-                            os.path.dirname(os.path.abspath(t.save_path)):
-                        # ⚠️ _unique_path 内部会再取一次 self._lock（经 _path_in_use），
-                        # 而 threading.Lock 不可重入 —— 在锁里调用它会直接死锁。
-                        # 这里把待处理的重挂请求收集起来，出了锁再算路径。
-                        pending.append((t, new_path))
-                t.status = "等待中"
-                t.error = ""
-                t.downloaded = 0
-                t.speed = 0
-                self._queue.append(t.task_id)
-            retried = list(targets)
-        # 锁外重挂路径：_unique_path/_path_in_use 需要拿锁
-        for t, new_path in (pending if rebase_to else []):
-            t.save_path = self._unique_path(new_path)
-            if t.convert_to_gif and t.gif_path:
-                t.gif_path = self._unique_path(os.path.join(
-                    os.path.dirname(t.save_path), os.path.basename(t.gif_path)))
-        pending = retried
-        for t in pending:
-            self.task_progress.emit(t)
-        if pending:
+        ids = None if tasks is None else [task.task_id for task in tasks]
+        count = self._retry_tasks(ids, ("失败",), rebase_to)
+        if count:
             self._pump()
-        return len(pending)
+        return count
+
+    def _retry_tasks(self, task_ids, statuses, rebase_to):
+        with self._publish_lock:
+            with self._lock:
+                ids = list(self._tasks) if task_ids is None else list(dict.fromkeys(task_ids))
+            notifications = []
+            for task_id in ids:
+                with self._lock:
+                    info = self._tasks.get(task_id)
+                    if (info is None or info.status not in statuses
+                            or task_id in self._cancel_flags):
+                        continue
+                    before = info.snapshot()
+                # 文件系统探测不占状态锁；发布锁阻止其他控制事务抢占重试目标。
+                save_path, gif_path = before.save_path, before.gif_path
+                if rebase_to:
+                    candidate = os.path.join(rebase_to, os.path.basename(save_path))
+                    if os.path.dirname(os.path.abspath(candidate)) != \
+                            os.path.dirname(os.path.abspath(save_path)):
+                        save_path = self._unique_path(candidate)
+                        if before.convert_to_gif and gif_path:
+                            gif_path = self._unique_path(os.path.join(
+                                os.path.dirname(save_path), os.path.basename(gif_path)))
+                with self._lock:
+                    info.save_path = save_path
+                    info.gif_path = gif_path
+                    info.status = "等待中"
+                    info.error = ""
+                    info.downloaded = 0
+                    info.speed = 0
+                    self._queue.append(task_id)
+                    notifications.append((self.task_progress, info.snapshot()))
+                if save_path != before.save_path:
+                    log.info("重试 %s 改为新目录：%s", task_id, save_path)
+            self._events.enqueue_many(notifications)
+        self._drain_notifications()
+        return len(notifications)
 
     def cancel_tasks(self, tasks=None):
         """批量取消；tasks 为空时取消所有未结束任务。返回实际取消的任务数"""
         with self._lock:
-            pool = tasks if tasks is not None else list(self._tasks.values())
-            targets = [t for t in pool if t.status in ("等待中", "下载中", "转换中")]
-            ids = [t.task_id for t in targets]
-        for tid in ids:
-            self.cancel(tid)
-        return len(ids)
+            ids = list(self._tasks) if tasks is None else list(dict.fromkeys(
+                task.task_id for task in tasks))
+        return sum(self._cancel_task(task_id) for task_id in ids)
 
     def remove_tasks(self, task_ids) -> int:
         """从任务表移除记录（只清列表，不删已下载的文件）。
@@ -478,16 +508,18 @@ class DownloadManager(QObject):
         避免下载线程回调时找不到 task_id。
         """
         removed = 0
-        with self._lock:
-            for tid in list(task_ids):
-                info = self._tasks.get(tid)
-                if info is None or info.status not in self.FINISHED_STATUS:
-                    continue
-                self._tasks.pop(tid, None)
-                self._cookies.pop(tid, None)
-                self._plans.pop(tid, None)
-                self._cancel_flags.pop(tid, None)
-                removed += 1
+        with self._publish_lock:
+            with self._lock:
+                for tid in list(task_ids):
+                    info = self._tasks.get(tid)
+                    if (info is None or info.status not in self.FINISHED_STATUS
+                            or tid in self._cancel_flags):
+                        continue
+                    self._tasks.pop(tid, None)
+                    self._cookies.pop(tid, None)
+                    self._plans.pop(tid, None)
+                    self._queue = [queued for queued in self._queue if queued != tid]
+                    removed += 1
         return removed
 
     def clear_finished(self) -> int:
@@ -498,7 +530,8 @@ class DownloadManager(QObject):
         with self._lock:
             while self._active < self.max_concurrent and self._queue:
                 task_id = self._queue.pop(0)
-                if self._tasks[task_id].status != "等待中":
+                info = self._tasks.get(task_id)
+                if info is None or info.status != "等待中":
                     continue
                 self._active += 1
                 self._cancel_flags[task_id] = threading.Event()
@@ -506,23 +539,20 @@ class DownloadManager(QObject):
                 t.start()
 
     def _run(self, task_id: str):
-        info = self._tasks[task_id]
-        cancel = self._cancel_flags[task_id]
-        cookies = self._cookies.get(task_id, "")
-        plan = self._plans.get(task_id) or [(info.url, "", [])]
+        with self._lock:
+            info = self._tasks[task_id]
+            cancel = self._cancel_flags[task_id]
+            cookies = self._cookies.get(task_id, "")
+            plan = self._plans.get(task_id) or [(info.url, "", [])]
         t0 = time.time()
         log.info("开始下载 %s | %s | 画质=%s | 候选=%d",
                  task_id, info.url, info.quality or "-",
                  len(plan))
         if (info.url or "").startswith("jmcomic://"):
             self._run_jmcomic(info, cancel, cookies)
-            with self._lock:
-                self._active -= 1
-                self._cancel_flags.pop(task_id, None)
-                # 重试禁漫任务仍需原来的 Cookie；移除任务记录时再释放。
             log.info("下载结束 %s 状态=%s 用时%.1fs", task_id, info.status,
                      time.time() - t0)
-            self.task_finished.emit(info)
+            self._finish_task(info)
             self._pump()
             return
         # 依次尝试「主地址 → 同档备用 CDN → 下一档画质」，全部失败才标记失败
@@ -541,7 +571,7 @@ class DownloadManager(QObject):
                     self._download_once(info, url, cancel, cookies,
                                         audio_url, audio_alts)
                     last_err = ""
-                    info.error = ""
+                    self._update_task(info, error="")
                     success = True
                     break
                 except _Cancelled:
@@ -549,7 +579,7 @@ class DownloadManager(QObject):
                     break
                 except IncompleteDownload as e:
                     last_err = str(e)[:200]
-                    info.error = last_err
+                    self._update_task(info, error=last_err)
                     log.warning("下载不完整，重试 %s（地址 %d/%d）：%s",
                                 task_id, idx + 1, len(plan), e)
                     continue
@@ -559,39 +589,33 @@ class DownloadManager(QObject):
                     # 链接过期尤其要在这里拦住：实测 15 个候选地址会全部 403，
                     # 既浪费时间又让日志里刷满无意义的 403。
                     last_err = str(e)[:200]
-                    info.error = last_err
+                    self._update_task(info, error=last_err)
                     log.error("下载失败（不可重试）%s：%s", task_id, e,
                               exc_info=True)
                     break
                 except Exception as e:  # noqa: BLE001 - 换备用地址再试
                     last_err = str(e)[:200]
-                    info.error = last_err
+                    self._update_task(info, error=last_err)
                     log.error("下载出错 %s（地址 %d/%d）：%s",
                               task_id, idx + 1, len(plan), e, exc_info=True)
                     break
             if success or cancel.is_set():
                 break
         if cancel.is_set():
-            info.status = "已取消"
+            self._update_task(info, status="已取消")
         elif last_err:
-            info.status = "失败"
-            info.error = last_err
-        elif info.convert_to_gif and info.status == "已完成":
+            self._update_task(info, status="失败", error=last_err)
+        elif info.convert_to_gif and info.status in ("已完成", "转换中"):
             # 抖音图文动图：视频轨下载完成后立刻转 GIF，任务最终产物是 .gif
             self._convert_task_gif(info, cancel)
         # 只要任务没有真正成功，就清掉可能残留的临时文件，
         # 避免用户下载目录里堆 .part / .meta
         if info.status != "已完成":
             self._cleanup_temp_files(info.save_path)
-        info.speed = 0
-        with self._lock:
-            self._active -= 1
-            self._cancel_flags.pop(task_id, None)
-            # 保留 Cookie/候选地址直到任务记录被移除，失败任务才能完整重试。
         log.info("下载结束 %s 状态=%s 用时%.1fs 字节=%s/%s 错误=%s",
                  task_id, info.status, time.time() - t0,
                  info.downloaded, info.total, info.error or "-")
-        self.task_finished.emit(info)
+        self._finish_task(info)
         self._pump()
 
     # ------------------------------------------------------------------ #
@@ -602,28 +626,22 @@ class DownloadManager(QObject):
 
         source = info.save_path
         target = info.gif_path or (os.path.splitext(source)[0] + ".gif")
-        info.status = "转换中"
-        info.error = ""
-        self.task_progress.emit(info)
+        self._update_task(info, signal=self.task_progress, status="转换中", error="")
         log.info("开始转 GIF %s | %s -> %s", info.task_id, source, target)
         try:
             convert(source, target, cancel=cancel)
         except ConversionCancelled:
-            info.status = "已取消"
-            info.error = ""
-            self.task_progress.emit(info)
+            self._update_task(info, signal=self.task_progress, status="已取消", error="")
             log.info("已取消转 GIF %s，保留视频 %s", info.task_id, source)
             return
         except ConversionError as exc:
-            info.status = "失败"
-            info.error = f"GIF 转换失败：{exc}"[:300]
-            self.task_progress.emit(info)
+            self._update_task(info, signal=self.task_progress, status="失败",
+                              error=f"GIF 转换失败：{exc}"[:300])
             log.error("转 GIF 失败 %s：%s", info.task_id, exc)
             return
         except Exception as exc:  # noqa: BLE001 - 转码异常统一落到任务失败
-            info.status = "失败"
-            info.error = f"GIF 转换失败：{exc}"[:300]
-            self.task_progress.emit(info)
+            self._update_task(info, signal=self.task_progress, status="失败",
+                              error=f"GIF 转换失败：{exc}"[:300])
             log.exception("转 GIF 异常 %s", info.task_id)
             return
         # 转换成功后删除临时视频，任务路径与名称都指向 GIF
@@ -631,14 +649,13 @@ class DownloadManager(QObject):
             os.remove(source)
         except OSError as exc:
             log.warning("GIF 已生成但删除临时视频失败 %s：%s", source, exc)
-        info.save_path = target
+        changes = {"save_path": target, "status": "已完成"}
         try:
             size = os.path.getsize(target)
-            info.downloaded = info.total = size
+            changes.update(downloaded=size, total=size)
         except OSError:
             pass
-        info.status = "已完成"
-        self.task_progress.emit(info)
+        self._update_task(info, signal=self.task_progress, **changes)
         log.info("转 GIF 完成 %s | %s（%s 字节）", info.task_id, target, info.total)
 
     # ------------------------------------------------------------------ #
@@ -827,8 +844,7 @@ class DownloadManager(QObject):
         began = time.time()
         last = [0.0, 0]                  # 上次 emit 的时间 / 字节
 
-        info.total = base_total + total
-        info.downloaded = base_done
+        self._update_task(info, total=base_total + total, downloaded=base_done)
 
         chunk_count = len(pending)
 
@@ -900,21 +916,27 @@ class DownloadManager(QObject):
                                 f.write(buf)
                                 got += len(buf)
                                 now = time.time()
-                                with lock:
-                                    state["done"] += len(buf)
-                                    done = state["done"]
-                                    if now - last[0] >= 0.4:
-                                        info.downloaded = base_done + done
-                                        info.speed = ((done - last[1]) /
-                                                      (now - last[0]))
-                                        last[0], last[1] = now, done
-                                        self.task_progress.emit(info)
-                                    slow = _should_reconnect_slow_chunk(
-                                        got, e - s + 1, now - t_start,
-                                        state["best"],
-                                        state["abandon"] < abandon_budget)
-                                    if slow:
-                                        state["abandon"] += 1
+                                # 锁序：发布锁 → 分段局部锁 → 状态锁；发信号不占后两者。
+                                with self._publish_lock:
+                                    snapshot = None
+                                    with lock:
+                                        state["done"] += len(buf)
+                                        done = state["done"]
+                                        if now - last[0] >= 0.4:
+                                            snapshot = self._update_task(
+                                                info, downloaded=base_done + done,
+                                                speed=(done - last[1]) / (now - last[0]))
+                                            last[0], last[1] = now, done
+                                        slow = _should_reconnect_slow_chunk(
+                                            got, e - s + 1, now - t_start,
+                                            state["best"],
+                                            state["abandon"] < abandon_budget)
+                                        if slow:
+                                            state["abandon"] += 1
+                                    if snapshot is not None:
+                                        self._events.enqueue(self.task_progress, snapshot)
+                                if snapshot is not None:
+                                    self._drain_notifications()
                                 if slow:
                                     raise _SlowChunk()
                     if got < expected:
@@ -961,13 +983,13 @@ class DownloadManager(QObject):
         if cancel.is_set():
             raise _Cancelled()
         if state["err"] is not None:
-            info.downloaded = base_done
+            self._update_task(info, downloaded=base_done)
             raise state["err"]
         got = state["done"]
         if got < total:
             raise IncompleteDownload(f"分段下载不完整 {got}/{total} 字节")
-        info.downloaded = base_done + total
-        info.speed = total / max(0.001, time.time() - began)
+        self._update_task(info, downloaded=base_done + total,
+                          speed=total / max(0.001, time.time() - began))
         return total
 
     def _fetch_track(self, url: str, tmp_path: str, headers: dict, cancel,
@@ -1033,7 +1055,7 @@ class DownloadManager(QObject):
                     return downloaded
                 resp.close()
                 self._discard_partial(tmp_path, meta_path)
-                info.downloaded = base_done
+                self._update_task(info, downloaded=base_done)
                 log.warning("续传被拒（HTTP 416），丢弃残片重下：%s",
                             os.path.basename(tmp_path))
                 raise IncompleteDownload("服务端拒绝续传（HTTP 416），已重新下载")
@@ -1053,7 +1075,7 @@ class DownloadManager(QObject):
                     # 继续追加会把两段数据拼成坏文件，必须丢弃残片重下。
                     resp.close()
                     self._discard_partial(tmp_path, meta_path)
-                    info.downloaded = base_done
+                    self._update_task(info, downloaded=base_done)
                     log.warning("续传起点不符，丢弃残片重下：%s（本地 %s，服务端从 %s 开始）",
                                 os.path.basename(tmp_path), resume_from, start)
                     raise IncompleteDownload(
@@ -1066,7 +1088,7 @@ class DownloadManager(QObject):
                     # 声明的资源总长 ≠ 本地残片 + 本次余量 → 服务端资源已变
                     resp.close()
                     self._discard_partial(tmp_path, meta_path)
-                    info.downloaded = base_done
+                    self._update_task(info, downloaded=base_done)
                     log.warning("服务端文件长度已变，丢弃残片重下：%s",
                                 os.path.basename(tmp_path))
                     raise IncompleteDownload(
@@ -1079,7 +1101,7 @@ class DownloadManager(QObject):
                 if rid and saved_rid and rid != saved_rid:
                     resp.close()
                     self._discard_partial(tmp_path, meta_path)
-                    info.downloaded = base_done
+                    self._update_task(info, downloaded=base_done)
                     log.warning("服务端资源标识已变，丢弃残片重下：%s",
                                 os.path.basename(tmp_path))
                     raise IncompleteDownload("服务端资源标识已变化，已重新下载")
@@ -1100,8 +1122,8 @@ class DownloadManager(QObject):
             # 万一遇到既无长度、又靠连接关闭界定 body 的响应，至少能拿探测值比对。
             if not total and base_total_seen:
                 total = base_total_seen
-            info.total = (base_total or 0) + total
-            info.downloaded = base_done + downloaded
+            self._update_task(info, total=(base_total or 0) + total,
+                              downloaded=base_done + downloaded)
             last_time, last_bytes = time.time(), downloaded
             with open(tmp_path, mode) as f:
                 for chunk in resp.iter_content(CHUNK):
@@ -1112,10 +1134,10 @@ class DownloadManager(QObject):
                         downloaded += len(chunk)
                         now = time.time()
                         if now - last_time >= 0.4:
-                            info.downloaded = base_done + downloaded
-                            info.speed = (downloaded - last_bytes) / (now - last_time)
+                            self._update_task(
+                                info, signal=self.task_progress, downloaded=base_done + downloaded,
+                                speed=(downloaded - last_bytes) / (now - last_time))
                             last_time, last_bytes = now, downloaded
-                            self.task_progress.emit(info)
         # ---- 完整性判定 ----
         # ① 知道总长：严格比对（旧行为）
         if total > 0 and downloaded < total:
@@ -1148,34 +1170,28 @@ class DownloadManager(QObject):
     def _run_jmcomic(self, info, cancel, cookies: str):
         """禁漫本子走 jmcomic 解码下载（原图切片混淆，不能当普通直链）。"""
         from .jmcomic_bridge import DownloadCancelled, download_jmcomic
-        info.status = "下载中"
-        self.task_progress.emit(info)
+        self._update_task(info, signal=self.task_progress, status="下载中")
 
         def on_progress(done: int, total: int):
-            info.downloaded = max(0, int(done))
-            info.total = max(int(total), info.downloaded)
-            info.status = "下载中"
-            self.task_progress.emit(info)
+            done = max(0, int(done))
+            self._update_task(info, signal=self.task_progress, downloaded=done,
+                              total=max(int(total), done), status="下载中")
 
         try:
             download_jmcomic(info.url, info.save_path, cookies,
                              cancel=cancel, progress_cb=on_progress)
             if cancel.is_set():
-                info.status = "已取消"
+                self._update_task(info, signal=self.task_progress, status="已取消", speed=0)
                 return
-            if info.total <= 0:
-                info.total = max(info.downloaded, 1)
-            info.downloaded = info.total
-            info.status = "已完成"
+            total = info.total if info.total > 0 else max(info.downloaded, 1)
+            self._update_task(info, total=total, downloaded=total, status="已完成")
         except DownloadCancelled:
-            info.status = "已取消"
+            self._update_task(info, status="已取消")
         except Exception as e:  # noqa: BLE001
-            info.status = "失败"
-            info.error = str(e)[:200]
+            self._update_task(info, status="失败", error=str(e)[:200])
             # 只记录异常栈，不记录Cookie；此前这里只改状态导致日志看不见失败原因。
             log.exception("禁漫下载失败 %s：%s", info.task_id, info.error)
-        info.speed = 0
-        self.task_progress.emit(info)
+        self._update_task(info, signal=self.task_progress, speed=0)
 
     def _download_once(self, info, url: str, cancel, cookies: str = "",
                        audio_url: str = "", audio_fallbacks: list = None):
@@ -1183,11 +1199,10 @@ class DownloadManager(QObject):
 
         `audio_fallbacks` 是这路音频的其他 CDN 地址，按顺序作为兜底。
         """
-        info.status = "下载中"
-        self.task_progress.emit(info)
+        self._update_task(info, signal=self.task_progress, status="下载中")
         # 规范化路径 + 提前暴露「父目录建不出来 / 位置被同名目录占用 / 不可写」，
         # 避免把 Errno 13 这种含义模糊的底层异常直接抛到界面上。
-        info.save_path = prepare_target_path(info.save_path)
+        self._update_task(info, save_path=prepare_target_path(info.save_path))
 
         # ⚠️ 抖音直链是时效签名：过期后**所有**镜像统一回 403。
         # 实测 17:29 解析、21:17 重试 → 15 个候选地址全部 403，而用户只看到
@@ -1240,13 +1255,12 @@ class DownloadManager(QObject):
                     if i + 1 < len(audio_urls):
                         # 换 CDN 不续传：不同签名的地址不能拼在同一份残片上
                         self._discard_partial(a_tmp)
-                        info.downloaded = v_got
+                        self._update_task(info, downloaded=v_got)
             if audio_err is not None:
                 raise audio_err
             log.info("DASH 两轨下载完成 %s：视频 %s 字节 + 音频 %s 字节，开始合并",
                      info.task_id, v_got, a_got)
-            info.status = "合并中"
-            self.task_progress.emit(info)
+            self._update_task(info, signal=self.task_progress, status="合并中")
             # -nostdin + DEVNULL：打包成窗口程序后没有控制台，ffmpeg 若去读
             # stdin 会一直等（任务永远停在「合并中」）
             cmd = [ff, "-nostdin", "-y", "-loglevel", "error", "-i", v_tmp,
@@ -1275,8 +1289,8 @@ class DownloadManager(QObject):
                 self._discard_partial(info.save_path)
                 raise ValueError(f"ffmpeg 合并失败：{(proc.stderr or '')[:150]}")
             self._cleanup_temp_files(info.save_path)
-            info.downloaded = info.total or (v_got + a_got)
-            info.status = "已完成"
+            self._update_task(info, downloaded=info.total or (v_got + a_got),
+                              status="转换中" if info.convert_to_gif else "已完成")
             return
 
         # 单文件：IDM 式多连接分段（能分段就分段，失败自动降级单连接）
@@ -1288,8 +1302,8 @@ class DownloadManager(QObject):
         os.replace(tmp_path, info.save_path)
         # 收尾：清掉 .part.meta 之类不再需要的附属文件
         self._cleanup_temp_files(info.save_path)
-        info.downloaded = info.total or got
-        info.status = "已完成"
+        self._update_task(info, downloaded=info.total or got,
+                          status="转换中" if info.convert_to_gif else "已完成")
 
 
 class SignedUrlExpired(Exception):
