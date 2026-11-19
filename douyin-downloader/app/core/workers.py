@@ -230,7 +230,7 @@ class CoverWorker(QThread):
 
     def run(self):
         try:
-            from .downloader import headers_for
+            from .http_headers import headers_for
             headers = headers_for(self.url)
             headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " \
                                     "AppleWebKit/537.36 (KHTML, like Gecko) " \

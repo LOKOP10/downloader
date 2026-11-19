@@ -79,20 +79,22 @@ class AccountRow(QWidget):
         super().__init__(parent)
         self._descText = desc
         self._busy = False
+        self._show_divider = True
         self.setMinimumHeight(D.ROW_H)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(0, 8, 0, 8)
+        row.setContentsMargins(0, 10, 0, 10)
         row.setSpacing(D.GAP_MD)
 
-        self.iconWidget = W.IconBadge(icon, self, 28, 14)
+        self.iconWidget = W.RowIcon(icon, self, 22, 15)
         row.addWidget(self.iconWidget, 0, Qt.AlignmentFlag.AlignTop)
 
         text = QWidget(self)
         col = W.QVBoxLayout(text)
         col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(2)
-        self.titleLabel = W.text_label(name, text, D.TEXT_PRIMARY, D.FONT_BODY)
+        col.setSpacing(3)
+        self.titleLabel = W.text_label(name, text, D.TEXT_PRIMARY,
+                                       D.FONT_BODY, D.W_MEDIUM)
         col.addWidget(self.titleLabel)
         self.descLabel = W.text_label(desc, text, D.TEXT_TERTIARY,
                                       D.FONT_CAPTION, wrap=True)
@@ -151,7 +153,13 @@ class AccountRow(QWidget):
     def is_busy(self) -> bool:
         return self._busy
 
+    def set_divider(self, show: bool) -> None:
+        self._show_divider = bool(show)
+        self.update()
+
     def paintEvent(self, event):
+        if not self._show_divider:
+            return
         from PySide6.QtGui import QPainter, QPen
         painter = QPainter(self)
         painter.setPen(QPen(W.col(D.HAIRLINE_SOFT), 1))

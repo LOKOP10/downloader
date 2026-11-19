@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QHBoxLayout,
                                QHeaderView, QLabel, QTableWidgetItem, QWidget)
 from qfluentwidgets import (FluentIcon as FIF, IndeterminateProgressBar,
                             InfoBar, InfoBarPosition, LineEdit,
-                            PrimaryPushButton, PushButton, ScrollArea, SwitchButton,
+                            PushButton, ScrollArea, SwitchButton,
                             TableWidget)
 
 from ..core.domain import URL_PATTERN, needs_cookie_for_source
@@ -33,7 +33,7 @@ class BatchInterface(ScrollArea):
         self.view = QWidget(self)
         self.view.setObjectName("batchView")
         self.setWidget(self.view)
-        self.vBox = W.page_body(self.view, pad=24, spacing=12)
+        self.vBox = W.page_body(self.view)
 
         self.sec_uid = ""
         self.nickname = ""
@@ -78,7 +78,7 @@ class BatchInterface(ScrollArea):
         self.loginBtn = PushButton(FIF.PEOPLE, "登录抖音", card)
         self.loginBtn.setToolTip("扫码登录后可抓取全部作品（未登录只能抓取第一页）")
         self.loginBtn.clicked.connect(self._on_login)
-        self.fetchBtn = PrimaryPushButton(FIF.PEOPLE, "获取作品列表", card)
+        self.fetchBtn = PushButton(FIF.SEARCH, "获取作品列表", card)
         self.fetchBtn.setFixedHeight(34)
         self.fetchBtn.clicked.connect(self._on_fetch)
         row.addWidget(pasteBtn)
@@ -127,7 +127,7 @@ class BatchInterface(ScrollArea):
         self.loadMoreBtn = PushButton(FIF.DOWNLOAD, "加载更多", card)
         self.loadMoreBtn.clicked.connect(self._on_load_more)
         self.loadMoreBtn.setEnabled(False)
-        self.downloadBtn = PrimaryPushButton(FIF.DOWNLOAD, "下载选中", card)
+        self.downloadBtn = W.PrimaryButton(FIF.DOWNLOAD, "下载选中", card)
         self.downloadBtn.clicked.connect(self._on_download_selected)
         self.incrementalSwitch.checkedChanged.connect(self._on_incremental_changed)
         toolbar.addWidget(self.selectAllBtn)
@@ -157,8 +157,16 @@ class BatchInterface(ScrollArea):
             header.setSectionResizeMode(c, QHeaderView.Fixed)
             self.table.setColumnWidth(c, width)
         self.table.setMinimumHeight(320)
+        self.table.hide()
         card.body.addWidget(self.table, 1)
+
+        self.emptyState = W.EmptyState(
+            FIF.PEOPLE, "等待获取作者作品",
+            "在上方输入作者主页链接并点击「获取作品列表」，抓取后可勾选并增量下载。",
+            card)
+        card.body.addWidget(self.emptyState, 1)
         self.vBox.addWidget(card, 1)
+        self._sync_empty_state()
 
     def _on_paste(self):
         text = (QGuiApplication.clipboard().text() or "").strip()
@@ -205,12 +213,21 @@ class BatchInterface(ScrollArea):
         self._workers.append(w)
         w.start()
 
+    def _sync_empty_state(self):
+        has_rows = self.table.rowCount() > 0
+        self.table.setVisible(has_rows)
+        self.emptyState.setVisible(not has_rows)
+        self.selectAllBtn.setEnabled(has_rows)
+        self.selectNoneBtn.setEnabled(has_rows)
+        self.downloadBtn.setEnabled(has_rows)
+
     def _on_user_resolved(self, sec_uid: str):
         # 主页解析已完成，交棒给 _load_page（后者自己有独立的防重入位）
         self._fetching = False
         self.sec_uid = sec_uid
         self._infos.clear()
         self.table.setRowCount(0)
+        self._sync_empty_state()
         self.max_cursor = 0
         self._load_page()
 
@@ -282,6 +299,7 @@ class BatchInterface(ScrollArea):
             self.nickname = nickname
         for info in infos:
             self._append_row(info)
+        self._sync_empty_state()
         self.countLabel.setText(f"作品列表（共 {len(self._infos)} 个）")
         self.userLabel.setText(f"作者：{self.nickname or self.sec_uid}，已全部加载")
         if infos:

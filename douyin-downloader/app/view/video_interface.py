@@ -11,7 +11,7 @@ from PySide6.QtGui import (QColor, QDesktopServices, QGuiApplication, QPainter,
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QListView,
                                QListWidget, QListWidgetItem, QMenu, QMessageBox,
                                QStyle, QStyledItemDelegate, QWidget)
-from qfluentwidgets import ComboBox, FluentIcon as FIF, PrimaryPushButton, PushButton, SearchLineEdit
+from qfluentwidgets import ComboBox, FluentIcon as FIF, PushButton, SearchLineEdit
 from qfluentwidgets.common.style_sheet import isDarkTheme
 
 from ..core.ffmpeg import ffmpeg_path
@@ -60,9 +60,15 @@ class _PosterDelegate(QStyledItemDelegate):
         dark = isDarkTheme()
         primary = QColor(D.TEXT_PRIMARY[int(dark)])
         muted = QColor(D.TEXT_SECONDARY[int(dark)])
+        tertiary = QColor(D.TEXT_TERTIARY[int(dark)])
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = _card_rect(option.rect)
+        view = self._view
+        if view is not None and getattr(view, "hover_row", -1) == index.row():
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(D.SURFACE_HI[int(dark)]))
+            painter.drawRoundedRect(rect.adjusted(-4, -4, 4, 4), 12, 12)
         poster_rect = QRectF(rect.left(), rect.top(), rect.width(), 128)
         clip = QPainterPath()
         clip.addRoundedRect(poster_rect, 10, 10)
@@ -97,7 +103,7 @@ class _PosterDelegate(QStyledItemDelegate):
         painter.setFont(D.font(14, D.W_SEMI))
         title = painter.fontMetrics().elidedText(item.title, Qt.TextElideMode.ElideRight, int(rect.width()))
         painter.drawText(QRectF(rect.left(), rect.top() + 140, rect.width(), 24), title)
-        painter.setPen(muted)
+        painter.setPen(tertiary)
         painter.setFont(D.font(11))
         progress = (f"上次看到 {fmt_time(item.resume_ms)}"
                     if item.resume_ms > 0 else ("已看完" if item.watched else "还没开始看"))
@@ -218,7 +224,7 @@ class VideoInterface(QWidget):
         self._ffmpeg = ffmpeg_path(ctx.config.base_dir)
         # 截帧缓存目录：程序目录/video_covers/（与 video_library.json 同级）
         self._covers_dir = os.path.join(ctx.config.base_dir, COVER_DIR)
-        layout = W.page_body(self, pad=24, spacing=12)
+        layout = W.page_body(self)
         header = QHBoxLayout()
         header.setSpacing(D.GAP_SM)
         self.heading = W.PageHeading(
@@ -238,7 +244,7 @@ class VideoInterface(QWidget):
         self.folderBtn = PushButton(FIF.FOLDER, "导入文件夹", self)
         self.folderBtn.setToolTip("只扫描所选文件夹这一层的视频并入库，不进子文件夹")
         self.folderBtn.clicked.connect(self._choose_folder)
-        self.addBtn = PrimaryPushButton(FIF.ADD, "添加视频", self)
+        self.addBtn = W.PrimaryButton(FIF.ADD, "添加视频", self)
         self.addBtn.setToolTip("选择一个或多个视频文件加入视频库")
         self.addBtn.clicked.connect(self._choose_video)
         for btn in (self.refreshBtn, self.moreBtn, self.folderBtn, self.addBtn):
@@ -281,10 +287,11 @@ class VideoInterface(QWidget):
         D.theme_qss(self.shelf, "QListWidget{background:transparent;border:0;}",
                     "QListWidget{background:transparent;border:0;}")
         panel.body.addWidget(self.shelf, 1)
-        self.empty = D.caption("", self)
-        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty.setWordWrap(True)
-        self.empty.setMinimumHeight(180)
+        self.empty = W.EmptyState(
+            FIF.MOVIE, "从一个文件开始播放",
+            "点击「添加视频」选择文件，或把视频 / 文件夹拖到这里；下载完成的视频会自动入库。",
+            self)
+        self.empty.setMinimumHeight(220)
         panel.body.addWidget(self.empty, 1)
         self.status = D.hint_label(
             "本地播放 · 源文件不变 · 双击卡片播放 / 继续播放 · 右键可复制视频、删除"
@@ -465,9 +472,12 @@ class VideoInterface(QWidget):
             self._load_cover(item)
         self.shelf.setVisible(bool(items))
         self.empty.setVisible(not items)
-        self.empty.setText("没有匹配的视频。试试其他关键词或重新导入。" if self.library.videos
-                           else "从一个文件开始播放\n\n点击「添加视频」选择文件，或把视频 / 文件夹拖到这里。\n"
-                                "下载完成的视频会自动出现在这里；播放进度自动保存。")
+        if self.library.videos:
+            self.empty.set_text("没有匹配的视频", "试试其他关键词或重新导入。")
+        else:
+            self.empty.set_text(
+                "从一个文件开始播放",
+                "点击「添加视频」选择文件，或把视频 / 文件夹拖到这里；下载完成的视频会自动入库。")
 
     def _load_cover(self, video):
         """异步解码封面到 self._covers（工作线程读文件，UI 线程只收 QPixmap）。"""

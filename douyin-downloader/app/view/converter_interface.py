@@ -11,11 +11,11 @@ import threading
 from PySide6.QtCore import QObject, Qt, QUrl, Signal, Slot, QEvent
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QColorDialog, QFileDialog,
-                               QFormLayout, QHBoxLayout, QListWidget,
+                               QFormLayout, QFrame, QHBoxLayout, QListWidget,
                                QListWidgetItem, QProgressBar, QSizePolicy,
                                QWidget)
 from qfluentwidgets import (CheckBox, ComboBox, FluentIcon as FIF, LineEdit,
-                            ListWidget, PrimaryPushButton, PushButton, ScrollArea,
+                            ListWidget, PushButton, ScrollArea,
                             TransparentToolButton)
 
 from ..core.ffmpeg import ffmpeg_path
@@ -84,22 +84,27 @@ class ConverterInterface(ScrollArea):
         self.setWidget(self.content)
         D.theme_qss(self.content, "QWidget#converterContent{background:transparent;}",
                     "QWidget#converterContent{background:transparent;}")
-        layout = W.page_body(self.content, pad=24, spacing=12)
-        layout.addWidget(W.PageHeading(
+        layout = W.page_body(self.content)
+        heading = W.PageHeading(
             "WebP 转 MP4",
             "本地完成，不联网、不上传：动图逐帧转 MP4，或按列表顺序合并成一个视频。",
-            self.content))
+            self.content)
+        self.backBtn = PushButton(FIF.RETURN, "返回设置", heading)
+        self.backBtn.clicked.connect(self._back_to_settings)
+        heading.layout().addWidget(
+            self.backBtn, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(heading)
 
         columns = QHBoxLayout()
-        columns.setSpacing(12)
+        columns.setSpacing(D.GAP_MD)
 
         # ---------------- 左：输入队列 ----------------
-        left = W.Panel(self.content, padding=(16, 12, 16, 12), spacing=10)
+        left = W.Panel(self.content, padding=(16, 14, 16, 14), spacing=10)
         leftHead = W.PanelTitle("输入队列", left, note="按列表顺序合并")
         left.body.addWidget(leftHead)
         toolbar = QHBoxLayout()
         toolbar.setSpacing(D.GAP_XS)
-        self.addBtn = PrimaryPushButton(FIF.ADD, "添加 WebP", left)
+        self.addBtn = PushButton(FIF.ADD, "添加 WebP", left)
         self.addBtn.setToolTip("选择 WebP 文件（支持多选）")
         # 列表内操作用图标按钮：它们只作用于选中项，用文字会跟「添加」抢主次。
         # 图标按钮必须显式给边长，否则放进 QHBoxLayout 会被拉成大方块。
@@ -130,14 +135,15 @@ class ConverterInterface(ScrollArea):
         columns.addWidget(left, 1)
 
         # ---------------- 右：转换设置 ----------------
-        right = W.Panel(self.content, padding=(16, 12, 16, 12), spacing=10)
+        right = W.Panel(self.content, padding=(16, 14, 16, 14), spacing=10)
         self.editPanel = right
         right.body.addWidget(W.PanelTitle("转换设置", right))
+        right.body.addWidget(W.Divider(right))
 
         form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(D.GAP_MD)
-        form.setVerticalSpacing(8)
+        form.setContentsMargins(0, 2, 0, 0)
+        form.setHorizontalSpacing(D.GAP_LG)
+        form.setVerticalSpacing(10)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.modeCombo = ComboBox(right)
@@ -146,8 +152,17 @@ class ConverterInterface(ScrollArea):
         self.crfCombo.addItems(["CRF 12 · 高保真（有损）", "CRF 18 · 推荐",
                                 "CRF 23 · 较小文件"])
         self.crfCombo.setCurrentIndex(1)
-        self.backgroundBtn = PushButton("背景色 #ffffff", right)
+
+        bgRow = QHBoxLayout()
+        bgRow.setSpacing(D.GAP_SM)
+        self.bgSwatch = QFrame(right)
+        self.bgSwatch.setFixedSize(22, 22)
+        self._refresh_bg_swatch()
+        self.backgroundBtn = PushButton("选择颜色 #ffffff", right)
         self.backgroundBtn.setToolTip("WebP 的透明区域会被合成到这个不透明背景色上")
+        bgRow.addWidget(self.bgSwatch)
+        bgRow.addWidget(self.backgroundBtn)
+        bgRow.addStretch(1)
 
         output = QHBoxLayout()
         output.setSpacing(D.GAP_XS)
@@ -172,7 +187,7 @@ class ConverterInterface(ScrollArea):
         form.addRow(W.text_label("画质", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
                     self.crfCombo)
         form.addRow(W.text_label("透明区背景", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
-                    self.backgroundBtn)
+                    bgRow)
         form.addRow(W.text_label("输出目录", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
                     output)
         form.addRow(W.text_label("合并文件名", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
@@ -195,7 +210,7 @@ class ConverterInterface(ScrollArea):
                              QSizePolicy.Policy.Maximum)
         actions = QHBoxLayout()
         actions.setSpacing(D.GAP_SM)
-        self.startBtn = PrimaryPushButton(FIF.PLAY, "开始转换", result)
+        self.startBtn = W.PrimaryButton(FIF.PLAY, "开始转换", result)
         self.cancelBtn = PushButton(FIF.CLOSE, "取消", result)
         self.cancelBtn.setEnabled(False)
         self.openBtn = PushButton(FIF.FOLDER, "打开输出目录", result)
@@ -211,13 +226,7 @@ class ConverterInterface(ScrollArea):
                                         D.FONT_CAPTION, wrap=True)
         result.body.addWidget(self.statusLabel)
         self.progressBar = QProgressBar(result)
-        self.progressBar.setTextVisible(False)
-        self.progressBar.setFixedHeight(4)
-        D.theme_qss(self.progressBar,
-                    "QProgressBar{border:0;border-radius:2px;background:#E4E4E7;}"
-                    "QProgressBar::chunk{background:#009faa;border-radius:2px;}",
-                    "QProgressBar{border:0;border-radius:2px;background:#27272A;}"
-                    "QProgressBar::chunk{background:#009faa;border-radius:2px;}")
+        D.style_progress_bar(self.progressBar)
         self.progressBar.setRange(0, 1)
         self.progressBar.setValue(0)
         result.body.addWidget(self.progressBar)
@@ -305,11 +314,19 @@ class ConverterInterface(ScrollArea):
     def _mode_changed(self, index):
         self.mergeNameEdit.setEnabled(index == 1)
 
+    def _refresh_bg_swatch(self):
+        D.theme_qss(
+            self.bgSwatch,
+            f"QFrame{{background:{self._background};border:1px solid {D.BORDER_STRONG[0]};border-radius:6px;}}",
+            f"QFrame{{background:{self._background};border:1px solid {D.BORDER_STRONG[1]};border-radius:6px;}}",
+        )
+
     def _choose_background(self):
         color = QColorDialog.getColor(QColor(self._background), self, "选择不透明背景色")
         if color.isValid():
             self._background = color.name(QColor.NameFormat.HexRgb)
-            self.backgroundBtn.setText(f"背景色：{self._background}")
+            self._refresh_bg_swatch()
+            self.backgroundBtn.setText(f"选择颜色 {self._background}")
 
     def _choose_output(self):
         # 原生Windows选择器在受限启动环境可能不显示；Qt自绘对话框不依赖Shell。
@@ -475,6 +492,12 @@ class ConverterInterface(ScrollArea):
                 self.statusLabel.setText("打开视频失败：" + str(error))
         elif path:
             self.statusLabel.setText("结果文件不存在或已被移动")
+
+    def _back_to_settings(self):
+        win = self.window()
+        page = getattr(win, "settingInterface", None)
+        if page is not None and hasattr(win, "switchTo"):
+            win.switchTo(page)
 
     def shutdown(self):
         """主窗口 closeEvent 可直接调用；绝不在 GUI 线程 join / wait。"""

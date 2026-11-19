@@ -17,7 +17,7 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets import (QFileDialog, QFormLayout, QHBoxLayout, QLabel,
                                QProgressBar, QSizePolicy, QVBoxLayout, QWidget)
-from qfluentwidgets import (ComboBox, FluentIcon as FIF, PrimaryPushButton,
+from qfluentwidgets import (ComboBox, FluentIcon as FIF,
                             PushButton, ScrollArea)
 
 from ..core.ffmpeg import ffmpeg_path
@@ -83,16 +83,23 @@ class _ExportJob:
 
 
 class _PreviewCanvas(QLabel):
-    """视频画面：等比缩放居中，黑底。"""
+    """视频画面：等比缩放居中，舞台深底 + 1px 描边。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("previewStage")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setText("选一个视频，这里就是预览画面")
         self.setMinimumSize(520, 292)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._image = None
-        self.setStyleSheet("background:#0B0B0F;color:#71717A;border-radius:8px;")
+        D.theme_qss(
+            self,
+            f"QLabel#previewStage{{background:{D.STAGE_BG[0]};color:#A1A1AA;"
+            f"border:1px solid {D.STAGE_BORDER[0]};border-radius:{D.RADIUS_MD}px;}}",
+            f"QLabel#previewStage{{background:{D.STAGE_BG[1]};color:{D.TEXT_TERTIARY[1]};"
+            f"border:1px solid {D.STAGE_BORDER[1]};border-radius:{D.RADIUS_MD}px;}}",
+        )
 
     def set_image(self, image: QImage):
         if image is None or image.isNull():
@@ -146,22 +153,27 @@ class FramesInterface(ScrollArea):
         D.theme_qss(self.content, "QWidget#framesContent{background:transparent;}",
                     "QWidget#framesContent{background:transparent;}")
 
-        layout = W.page_body(self.content, pad=24, spacing=12)
-        layout.addWidget(W.PageHeading(
+        layout = W.page_body(self.content)
+        heading = W.PageHeading(
             "导出原始帧",
             "在时间轴上拖动两端手柄夹住一段，把这段的每一帧原样导出（不抽帧、不补帧），导出后可回放确认。",
-            self.content))
+            self.content)
+        self.backBtn = PushButton(FIF.RETURN, "返回设置", heading)
+        self.backBtn.clicked.connect(self._back_to_settings)
+        heading.layout().addWidget(
+            self.backBtn, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(heading)
 
         columns = QHBoxLayout()
-        columns.setSpacing(12)
+        columns.setSpacing(D.GAP_MD)
 
         # ---------------- 左：预览 + 时间轴 ----------------
-        left = W.Panel(self.content, padding=(16, 12, 16, 12), spacing=8)
+        left = W.Panel(self.content, padding=(16, 14, 16, 14), spacing=8)
         head = QHBoxLayout()
         head.setSpacing(D.GAP_SM)
         head.addWidget(W.PanelTitle("预览与截取", left, note="拖两端手柄夹取"))
         head.addStretch(1)
-        self.pickBtn = PrimaryPushButton(FIF.ADD, "选择视频", left)
+        self.pickBtn = PushButton(FIF.ADD, "选择视频", left)
         self.pickBtn.clicked.connect(self._choose_video)
         self.clearBtn = PushButton(FIF.CLOSE, "清空", left)
         self.clearBtn.clicked.connect(self._clear_video)
@@ -205,22 +217,27 @@ class FramesInterface(ScrollArea):
         columns.addWidget(left, 3)
 
         # ---------------- 右：输出设置 ----------------
-        right = W.Panel(self.content, padding=(16, 12, 16, 12), spacing=10)
+        right = W.Panel(self.content, padding=(16, 14, 16, 14), spacing=10)
         self.editPanel = right
         right.body.addWidget(W.PanelTitle("输出设置", right))
+        right.body.addWidget(W.Divider(right))
         form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(D.GAP_SM)
+        form.setContentsMargins(0, 2, 0, 0)
+        form.setHorizontalSpacing(D.GAP_LG)
+        form.setVerticalSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.formatBox = ComboBox(right)
         for name, label in (("png", "PNG（无损，推荐）"), ("bmp", "BMP（不压缩，体积最大）"),
                             ("tif", "TIFF（无损）")):
             self.formatBox.addItem(label, userData=name)
         self.formatBox.currentIndexChanged.connect(self._sync_level_state)
-        form.addRow("输出格式", self.formatBox)
+        form.addRow(W.text_label("输出格式", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
+                    self.formatBox)
         self.levelBox = ComboBox(right)
         for level in range(1, 10):
             self.levelBox.addItem(f"{level}" + ("（最快）" if level == 1 else ""), userData=level)
-        form.addRow("PNG 压缩", self.levelBox)
+        form.addRow(W.text_label("PNG 压缩", right, D.TEXT_SECONDARY, D.FONT_CAPTION),
+                    self.levelBox)
         right.body.addLayout(form)
         right.body.addWidget(W.text_label(
             "输出目录固定为视频旁边的「<文件名>_frames」，与拖拽 bat 的老口径一致；"
@@ -234,7 +251,7 @@ class FramesInterface(ScrollArea):
         result = W.Panel(self.content, padding=(16, 12, 16, 12), spacing=8)
         buttons = QHBoxLayout()
         buttons.setSpacing(D.GAP_SM)
-        self.startBtn = PrimaryPushButton(FIF.PLAY, "开始导出", result)
+        self.startBtn = W.PrimaryButton(FIF.PLAY, "开始导出", result)
         self.startBtn.clicked.connect(self.start_export)
         self.cancelBtn = PushButton(FIF.CLOSE, "取消", result)
         self.cancelBtn.clicked.connect(self.cancel_export)
@@ -252,6 +269,7 @@ class FramesInterface(ScrollArea):
         result.body.addLayout(buttons)
 
         self.progressBar = QProgressBar(result)
+        D.style_progress_bar(self.progressBar)
         self.progressBar.setRange(0, 1)
         self.progressBar.setValue(0)
         result.body.addWidget(self.progressBar)
@@ -555,6 +573,12 @@ class FramesInterface(ScrollArea):
                 self.set_video(url.toLocalFile())
                 event.acceptProposedAction()
                 return
+
+    def _back_to_settings(self):
+        win = self.window()
+        page = getattr(win, "settingInterface", None)
+        if page is not None and hasattr(win, "switchTo"):
+            win.switchTo(page)
 
     def shutdown(self):
         self._closed = True

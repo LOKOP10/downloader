@@ -27,6 +27,7 @@ from .applog import get_logger
 from .domain import platform_of_host, referer_for
 from .models import VideoInfo, clean_cookie
 from .parser import DouyinParser, ParseError, PC_UA
+from .platform_registry import PLATFORM_ROUTES
 from .site_ctx import SiteContext, default_site_context
 from .youtube import parse_youtube
 
@@ -97,13 +98,24 @@ def parse_share(text: str, ctx: SiteContext = None, **legacy) -> VideoInfo:
     return info
 
 
+def _parse_douyin(url: str, cookie: str, profile_dir: str) -> VideoInfo:
+    """把抖音的构造参数与实例方法适配到统一的路由调用。"""
+    return DouyinParser(cookie, profile_dir=profile_dir).parse_video(url)
+
+
+def _parse_jmcomic(text: str, cookie: str) -> VideoInfo:
+    """保留禁漫的延迟导入，并在每次调用时取得当前解析函数。"""
+    from .jmcomic_bridge import parse_jmcomic
+    return parse_jmcomic(text, cookie)
+
+
 def _parse_share(text: str, ctx: SiteContext = None, **legacy) -> VideoInfo:
     """真正的分发逻辑（说明见 parse_share）"""
     if ctx is None:
         ctx = SiteContext(**{k: v for k, v in legacy.items() if v is not None})
     elif legacy:
         ctx = ctx.replaced(**legacy)
-    from .jmcomic_bridge import parse_jmcomic, try_parse_jm
+    from .jmcomic_bridge import try_parse_jm
 
     url = ""
     m = URL_PATTERN.search(text or "")
@@ -111,35 +123,22 @@ def _parse_share(text: str, ctx: SiteContext = None, **legacy) -> VideoInfo:
         url = m.group(0).rstrip("。.,;")
     if url:
         platform = platform_of_host(url)
-        if platform == "jmcomic":
-            return parse_jmcomic(url, ctx.jm_cookie)
-        if platform == "douyin":
-            return DouyinParser(ctx.cookie, profile_dir=ctx.dy_profile_dir).parse_video(url)
-        if platform == "x":
-            return parse_x(url, ctx.x_cookie, ctx.x_profile_dir)
-        if platform == "bilibili":
-            return parse_bilibili(url, ctx.bili_cookie, ctx.base_dir)
-        if platform == "xiaohongshu":
-            return parse_xiaohongshu(url, ctx.xhs_cookie, ctx.xhs_profile_dir)
-        if platform == "instagram":
-            return parse_instagram(url, ctx.ins_cookie, ctx.ins_profile_dir)
-        if platform == "pornhub":
-            return parse_pornhub(url)
-        if platform == "hanime1":
-            return parse_hanime1(url)
-        if platform == "youtube":
-            return parse_youtube(url)
+        route = PLATFORM_ROUTES.get(platform)
+        if route is not None:
+            # 动态解析入口，避免注册时捕获函数导致外部 monkeypatch 失效。
+            parser = globals()[route.parser_name]
+            return parser(url, *(getattr(ctx, field) for field in route.context_fields))
         # 未知域名但路径像禁漫 /album/ /photo/
         kind, jmid = try_parse_jm(url)
         if jmid:
-            return parse_jmcomic(url, ctx.jm_cookie)
+            return _parse_jmcomic(url, ctx.jm_cookie)
         raise ParseError(
             f"暂不支持该链接（{urllib.parse.urlparse(url).netloc}）。目前支持 "
             "抖音 / X / Instagram / B站 / 小红书 / YouTube / Pornhub / "
             "hanime1 / 禁漫")
     kind, jmid = try_parse_jm(text)
     if jmid:
-        return parse_jmcomic(text, ctx.jm_cookie)
+        return _parse_jmcomic(text, ctx.jm_cookie)
     raise ParseError("未在文本中检测到链接，请粘贴分享文案、链接或禁漫车号（JM123）")
 
 

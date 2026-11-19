@@ -27,11 +27,10 @@ class ConverterWindowIntegrationTest(unittest.TestCase):
    try:
     window.show();page=window.converterInterface;window.switchTo(page)
     self.app.processEvents()
-    # 导航项数 = 页面数：解析/批量/任务/漫画/本地视频/转MP4/转GIF/导出原始帧/设置
-    self.assertEqual(window.tabBar.count(),9)
+    # 导航项数 = 顶栏页面数：解析/批量/任务/漫画/本地视频/设置
+    self.assertEqual(window.tabBar.count(),6)
     self.assertLessEqual(window.height(),720)
-    # 「本地视频」插在漫画之后，转 MP4 因此是第 5 项（从 0 数）
-    self.assertIs(window._pages[5],page)
+    self.assertIn(page,window._all_pages)
     self.assertEqual(window.stackedWidget.currentWidget(),page)
     page.add_files([str(one),str(two)])
     page.outputEdit.setText(str(root/'outputs'))

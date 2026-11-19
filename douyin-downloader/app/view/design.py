@@ -28,13 +28,13 @@ GAP_LG = 16
 GAP_XL = 24
 GAP_2XL = 32
 
-PAGE_PAD_H = 36        # 页面左右留白
-PAGE_PAD_TOP = 28      # 顶部（比底部紧一点，页头更贴近内容）
-PAGE_PAD_BOTTOM = 32
-HEADER_GAP = 6         # 页头内部：主标题 ↔ 元信息条
-SECTION_GAP = 24       # 页头 → 首张卡片、卡片 → 卡片
+PAGE_PAD_H = 28        # 页面左右留白（与 workspace.page_body 对齐）
+PAGE_PAD_TOP = 20      # 顶部（页头紧贴导航栏下方，不浪费纵向空间）
+PAGE_PAD_BOTTOM = 20
+HEADER_GAP = 4         # 页头内部：主标题 ↔ 元信息条
+SECTION_GAP = 16       # 页头 → 首张面板、面板 → 面板
 CARD_PAD_H = 20
-CARD_PAD_V = 16
+CARD_PAD_V = 14
 CARD_GAP = 12          # 卡片内部块与块的间隔
 
 # --------------------------------------------------------------------- 圆角
@@ -97,8 +97,8 @@ def font(size: int = FONT_BODY, weight=W_REGULAR) -> QFont:
 # 注意深色底的三个层次和浅色是**反过来**的：深色下 bg-primary 近纯黑、
 # 面板比页面亮；浅色下页面是浅灰、面板纯白。照着抄别自己发挥。
 TEXT_PRIMARY = ("#18181B", "#FAFAFA")      # zinc-900 / zinc-50
-TEXT_SECONDARY = ("#52525B", "#A1A1AA")    # zinc-600 / zinc-400
-TEXT_TERTIARY = ("#71717A", "#71717A")     # zinc-500（浅深两套同值）
+TEXT_SECONDARY = ("#4D5562", "#B1B8C5")    # 次级正文，保留清晰的明暗层级
+TEXT_TERTIARY = ("#626B78", "#9097A4")     # 小字号说明在两套主题下均保持可读
 TEXT_ACCENT = ("#1A4A8E", "#8AB4FF")       # 强调文字/链接，取自深海蓝
 
 # 语义色**不直接用 Tailwind 调色板原值**：它的 warning #f59e0b / error #ef4444 是给
@@ -111,28 +111,32 @@ DANGER = ("#C42B36", "#F2727C")
 # 背景三级 + 交互态（primary=页底 / secondary=面板 / tertiary=内层 / hover·active=交互）。
 # 层次规则：页面底 = primary，卡片/面板/标题栏 = secondary，
 # 再往里一层（输入框、内嵌块）= tertiary。
-BG_PRIMARY = ("#F7F7F8", "#0E0F12")
-BG_SECONDARY = ("#FFFFFF", "#18181B")
-BG_TERTIARY = ("#F4F4F5", "#27272A")
-BG_HOVER = ("#E4E4E7", "#3F3F46")
-BG_ACTIVE = ("#D4D4D8", "#52525B")
+BG_PRIMARY = ("#F6F7F9", "#0C0D10")
+BG_SECONDARY = ("#FFFFFF", "#16171B")
+BG_TERTIARY = ("#EFEFF2", "#22242A")
+BG_HOVER = ("#E4E5E9", "#2E3139")
+BG_ACTIVE = ("#D6D8DE", "#3E424C")
 
 # 边框两级（default=常规描边 / strong=强调描边）
-BORDER = ("#E5E5E8", "#26272C")
-BORDER_STRONG = ("#D4D4D8", "#3F3F46")
+BORDER = ("#E4E5E9", "#24262D")
+BORDER_STRONG = ("#CFCFD6", "#383B44")
+
+# 媒体/视频预览舞台底色（深黑舞台，边界清晰）
+STAGE_BG = ("#121316", "#08090B")
+STAGE_BORDER = ("#D4D4D8", "#27272A")
 
 # --------------------------------------------------------------------- 工作台层次
 # 第二轮界面重做引入的层次模型（三档，够用且不会套娃）：
-#   画布 = 页面底（BG_PRIMARY），侧栏与画布同底、靠 1px 竖线分隔
+#   画布 = 页面底（BG_PRIMARY），顶栏与画布同底、靠 1px 横线分隔
 #   面板 = 内容块（SURFACE），1px 描边 + 12px 圆角
 #   板内 = 面板里再分块（SURFACE_HI），用于表头、输入槽、选中行
 # 之前只有「卡片 = 5% 白叠加」这一档，导致所有内容都长成同一张卡（同构即噪声）。
-SURFACE = ("#FFFFFF", "#16171B")
-SURFACE_HI = ("#F4F4F5", "#1E2025")
-HAIRLINE_SOFT = ("#F0F0F1", "#1E1F23")
+SURFACE = ("#FFFFFF", "#15161A")
+SURFACE_HI = ("#EFEFF2", "#1E2026")
+HAIRLINE_SOFT = ("#ECECEF", "#1D1F25")
 
 # 行高（px）：设置行 / 导航项 / 任务行。固定值而不是自适应，保证列表节奏一致。
-ROW_H = 56
+ROW_H = 52
 NAV_H = 34
 TASK_ROW_H = 66
 
@@ -154,9 +158,9 @@ SURFACE_SUNKEN = BG_TERTIARY
 HAIRLINE = BORDER
 
 # 帧率徽章配色（≥50 绿 / 30 中性 / 更低橙）
-FPS_HIGH = ("rgba(22,163,74,0.18)", "#16A34A")
-FPS_MID = ("rgba(128,128,128,0.18)", "#8A8F98")
-FPS_LOW = ("rgba(217,119,6,0.18)", "#D97706")
+FPS_HIGH = SUCCESS
+FPS_MID = TEXT_SECONDARY
+FPS_LOW = WARNING
 
 # --------------------------------------------------------------------- 强调色
 # 9 套预设强调色（默认深海蓝），色值取自一套现成的派生色板（每套另带
@@ -327,6 +331,49 @@ def theme_qss(widget: QWidget, light_qss: str, dark_qss: str) -> None:
     """
     setStyleSheet(widget, CustomStyleSheet(widget).setCustomStyleSheet(
         light_qss, dark_qss))
+
+
+def style_progress_bar(bar, height: int = 4) -> None:
+    """给 QProgressBar 应用跟随强调色的样式（替代硬编码色值）。
+
+    进度条 chunk 色跟随全局强调色，切换主题与强调色时自动重刷。
+    """
+    import shiboken6
+
+    bar.setTextVisible(False)
+    bar.setFixedHeight(height)
+
+    def _disconnect(*_):
+        try:
+            qconfig.themeChangedFinished.disconnect(_apply)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            qconfig.themeColorChanged.disconnect(_apply)
+        except (RuntimeError, TypeError):
+            pass
+
+    def _apply(*_):
+        if not shiboken6.isValid(bar):
+            _disconnect()
+            return
+        c = ThemeColor.PRIMARY.color().name()
+        bg = '#27272A' if isDarkTheme() else '#E4E4E7'
+        r = height // 2
+        try:
+            bar.setStyleSheet(
+                f"QProgressBar{{border:0;border-radius:{r}px;background:{bg};}}"
+                f"QProgressBar::chunk{{background:{c};border-radius:{r}px;}}")
+        except RuntimeError:
+            _disconnect()
+
+    _apply()
+    qconfig.themeChangedFinished.connect(_apply)
+    qconfig.themeColorChanged.connect(_apply)
+    try:
+        bar.destroyed.connect(_disconnect)
+    except (RuntimeError, TypeError):
+        pass
 
 
 # --------------------------------------------------------------------- 组件

@@ -21,17 +21,18 @@ import os
 
 from PySide6.QtCore import QMimeData, Qt, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QPixmap
-from PySide6.QtWidgets import (QHBoxLayout, QSizePolicy, QStackedWidget,
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QSizePolicy, QStackedWidget,
                                QVBoxLayout, QWidget)
 from qfluentwidgets import (BodyLabel, ComboBox, FluentIcon as FIF,
                             IndeterminateProgressBar, InfoBar, InfoBarPosition,
-                            LineEdit, PrimaryPushButton, PushButton, ScrollArea,
+                            LineEdit, PushButton, ScrollArea,
                             StrongBodyLabel, TransparentToolButton)
 
 from ..core.applog import get_logger
 from ..core.domain import needs_cookie_for_source
 from ..core.models import (VideoInfo, dropdown_quality_indices, fmt_count,
                            fmt_size)
+from ..core.platform_registry import is_comic, open_label_for
 from ..core.site_ctx import SiteContext
 from ..core.workers import CoverWorker, ParseWorker
 from . import design as D
@@ -57,7 +58,7 @@ class HomeInterface(ScrollArea):
         self.view = QWidget(self)
         self.setWidget(self.view)
         self.view.setObjectName("homeView")
-        self.vBox = W.page_body(self.view, pad=28, spacing=14)
+        self.vBox = W.page_body(self.view)
 
         self._current: VideoInfo = None
         self._workers = []
@@ -84,7 +85,7 @@ class HomeInterface(ScrollArea):
     def _build_header(self):
         self.vBox.addWidget(W.PageHeading(
             "视频解析",
-            "粘一条分享链接，选清晰度，下载。解析结果会展开在下方，不用切页。",
+            "自动识别分享文案中的链接，默认选择最高画质。",
             self.view))
 
     def _build_work_panel(self):
@@ -103,8 +104,8 @@ class HomeInterface(ScrollArea):
         self.pasteBtn = PushButton(FIF.PASTE, "粘贴", self.panel)
         self.pasteBtn.setToolTip("从剪贴板粘贴分享链接（Ctrl+V 也可以直接粘进输入框）")
         self.pasteBtn.clicked.connect(self._on_paste)
-        self.parseBtn = PrimaryPushButton(FIF.SEARCH, "解析", self.panel)
-        self.parseBtn.setFixedHeight(34)
+        self.parseBtn = W.PrimaryButton(FIF.SEARCH, "解析", self.panel)
+        self.parseBtn.setFixedHeight(40)
         self.parseBtn.setMinimumWidth(96)
         self.parseBtn.clicked.connect(self._on_parse)
         self.parseBtn.setToolTip("解析链接（输入框里回车同样可以）")
@@ -112,13 +113,13 @@ class HomeInterface(ScrollArea):
         self.linkEdit = LineEdit(self.panel)
         # 平台清单已经在下方说过了，这里只讲"粘什么、然后怎么走"
         self.linkEdit.setPlaceholderText(
-            "粘贴分享链接或分享文案，回车解析　·　也支持禁漫车号 JM123456")
+            "粘贴链接、分享文案或 JM 车号，按 Enter 解析")
         self.linkEdit.setClearButtonEnabled(True)
-        self.linkEdit.setFixedHeight(34)
+        self.linkEdit.setFixedHeight(40)
         self.linkEdit.setSizePolicy(QSizePolicy.Policy.Expanding,
                                     QSizePolicy.Policy.Fixed)
         self.linkEdit.returnPressed.connect(self._on_parse)
-        self.pasteBtn.setFixedHeight(34)
+        self.pasteBtn.setFixedHeight(40)
         row.addWidget(self.linkEdit, 1)
         row.addWidget(self.pasteBtn)
         row.addWidget(self.parseBtn)
@@ -126,17 +127,17 @@ class HomeInterface(ScrollArea):
 
         hint = W.text_label(_PLATFORM_LINE, self.panel, D.TEXT_TERTIARY,
                             D.FONT_CAPTION, wrap=True)
-        hint.setContentsMargins(0, 8, 0, 0)
+        hint.setContentsMargins(0, 6, 0, 0)
         self.panel.body.addWidget(hint)
 
         self.progress = IndeterminateProgressBar(self.panel)
         self.progress.setFixedHeight(3)
         self.progress.hide()
-        self.panel.body.addSpacing(8)
+        self.panel.body.addSpacing(6)
         self.panel.body.addWidget(self.progress)
 
         # ---------------- 结果分区 ----------------
-        self.panel.body.addSpacing(12)
+        self.panel.body.addSpacing(10)
         self.panel.body.addWidget(W.Divider(self.panel))
         self.panel.body.addSpacing(12)
 
@@ -152,14 +153,13 @@ class HomeInterface(ScrollArea):
         emptyLay.setSpacing(0)
         emptyLay.addStretch(1)
         self.emptyState = W.EmptyState(
-            FIF.SEARCH, "粘贴链接开始解析",
-            "解析成功后这里会展示作品信息与清晰度选项；\n"
-            "图集与禁漫车号（JM123456）同样支持。",
+            FIF.SEARCH, "等待解析",
+            "解析后可选择画质、预览并下载。",
             self.emptyWrap)
         emptyLay.addWidget(self.emptyState)
         emptyLay.addStretch(2)
         # 空态需要一块明确的"舞台"高度，否则收起时面板会塌成一条
-        self.emptyWrap.setMinimumHeight(300)
+        self.emptyWrap.setMinimumHeight(220)
 
         # 结果与空态共用一个容器：同一块区域在"还没解析"和"解析好了"之间切换，
         # 高度不会被内容撑来撑去，切页/解析时布局不跳动。
@@ -224,10 +224,9 @@ class HomeInterface(ScrollArea):
 
         result.addWidget(W.Divider(self.resultCard))
 
-        # 清晰度 + 动作条：左侧「选什么」，右侧「拿到文件」
-        # 主操作只留一个（下载），其余降为图标 + tooltip，减少一排等权文字按钮
-        actions = QHBoxLayout()
-        actions.setSpacing(D.GAP_SM)
+        # 画质与操作分行，长画质名称不会把下载按钮挤出窄窗口。
+        qualityRow = QHBoxLayout()
+        qualityRow.setSpacing(D.GAP_SM)
         self.qualityLabel = W.text_label("清晰度", self.resultCard, D.TEXT_SECONDARY,
                                          D.FONT_CAPTION)
         self.qualityCombo = ComboBox(self.resultCard)
@@ -239,38 +238,55 @@ class HomeInterface(ScrollArea):
         self.fpsBadge.setVisible(False)
         self.fpsBadge.setToolTip(
             "当前档位帧率：60fps 更顺滑（码率通常更低），30fps 码率更高")
-        actions.addWidget(self.qualityLabel)
-        actions.addWidget(self.qualityCombo)
-        actions.addWidget(self.fpsBadge)
+        self.qualityCombo.setMaximumWidth(360)
+        qualityRow.addWidget(self.qualityLabel)
+        qualityRow.addWidget(self.qualityCombo)
+        qualityRow.addWidget(self.fpsBadge)
+        qualityRow.addStretch(1)
+        result.addLayout(qualityRow)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(D.GAP_SM)
         actions.addStretch(1)
 
         self.copyLinkBtn = TransparentToolButton(FIF.LINK, self.resultCard)
+        self.copyLinkBtn.setFixedSize(32, 32)
         self.copyLinkBtn.setToolTip("复制无水印链接")
         self.copyLinkBtn.clicked.connect(self._on_copy_link)
         self.copyTitleBtn = TransparentToolButton(FIF.COPY, self.resultCard)
+        self.copyTitleBtn.setFixedSize(32, 32)
         self.copyTitleBtn.setToolTip("复制标题")
         self.copyTitleBtn.clicked.connect(
             lambda: self._copy(self.titleLabel.text(), "已复制标题"))
+
+        sep = QFrame(self.resultCard)
+        sep.setFixedSize(1, 18)
+        D.theme_qss(sep,
+                    f"QFrame{{background:{D.BORDER[0]};}}",
+                    f"QFrame{{background:{D.BORDER[1]};}}")
+
         self.coverBtn = PushButton(FIF.PHOTO, "封面", self.resultCard)
+        self.coverBtn.setFixedHeight(32)
         self.coverBtn.setToolTip("只下载封面图片")
         self.coverBtn.clicked.connect(self._on_download_cover)
         self.previewBtn = PushButton(FIF.VIEW, "预览", self.resultCard)
+        self.previewBtn.setFixedHeight(32)
         self.previewBtn.setToolTip("下载前在窗口里预览画面")
         self.previewBtn.clicked.connect(self._on_preview)
-        self.downloadBtn = PrimaryPushButton(FIF.DOWNLOAD, "下载视频",
-                                             self.resultCard)
+        self.downloadBtn = W.PrimaryButton(FIF.DOWNLOAD, "下载视频",
+                                           self.resultCard)
         self.downloadBtn.setFixedHeight(34)
         self.downloadBtn.clicked.connect(self._on_download)
 
         actions.addWidget(self.copyLinkBtn)
         actions.addWidget(self.copyTitleBtn)
         actions.addSpacing(D.GAP_XS)
+        actions.addWidget(sep)
+        actions.addSpacing(D.GAP_XS)
         actions.addWidget(self.coverBtn)
         actions.addWidget(self.previewBtn)
         actions.addWidget(self.downloadBtn)
         result.addLayout(actions)
-        # 内容贴顶：底部留白属于画布（有光晕），不要用空白把操作条推到最下
-        result.addStretch(1)
 
     # ------------------------------------------------------------------ #
     def _on_paste(self):
@@ -295,9 +311,9 @@ class HomeInterface(ScrollArea):
         self._parse_input = text
         self._parse_running = True
         self.parseBtn.setEnabled(False)
+        self.parseBtn.setText("解析中…")
         self.resultStack.setCurrentIndex(0)
-        self.emptyState.set_text("正在解析…", "根据站点不同，通常 1~5 秒；"
-                                             "需要登录的内容会稍慢。")
+        self.emptyState.set_text("正在解析…", "正在获取作品信息与可用画质，请稍候。")
         self.emptyState.set_body_visible(True)
         self._current = None
         self.progress.show()
@@ -329,7 +345,7 @@ class HomeInterface(ScrollArea):
         if not info.is_image:
             self.durationChip.setText(f"时长 {info.duration_text}")
             self.durationChip.setVisible(True)
-        elif info.source == "jmcomic":
+        elif is_comic(info.source):
             pages = (info.extra or {}).get("pages")
             self.durationChip.setText(f"{pages} 页" if pages else "整本")
             self.durationChip.setVisible(True)
@@ -345,7 +361,7 @@ class HomeInterface(ScrollArea):
         if not info.is_image:
             if info.quality:
                 parts.append(f"画质 {info.quality}")
-        elif info.source == "jmcomic":
+        elif is_comic(info.source):
             extra = info.extra or {}
             chapters = extra.get("chapters")
             pages = extra.get("pages")
@@ -362,7 +378,7 @@ class HomeInterface(ScrollArea):
         self.metaLabel.setText(" · ".join(parts))
         # 统计：显示折成「万」，精确值放 tooltip —— 量级要一眼可读，精度不能丢
         # 第三个统计位：抖音等平台是分享数；YouTube 拿到的其实是播放量，别标成"分享"
-        play_label = "观看" if info.source == "youtube" else "分享"
+        play_label = open_label_for(info.source)
         self.statsLabel.set_stats([
             ("点赞", fmt_count(info.digg_count)),
             ("评论", fmt_count(info.comment_count)),
@@ -371,7 +387,7 @@ class HomeInterface(ScrollArea):
         self.statsLabel.setToolTip(
             f"点赞 {info.digg_count}　评论 {info.comment_count}　"
             f"{play_label} {info.share_count}")
-        if info.source == "jmcomic":
+        if is_comic(info.source):
             self.downloadBtn.setText("下载本子")
             self.downloadBtn.setIcon(FIF.PHOTO)
         else:
@@ -400,10 +416,10 @@ class HomeInterface(ScrollArea):
             self.qualityCombo.setVisible(True)
             # 下拉里文字可能变长，按最长项自适应宽度
             self.qualityCombo.setMinimumWidth(
-                max(220, self.qualityCombo.fontMetrics().horizontalAdvance(
+                min(360, max(220, self.qualityCombo.fontMetrics().horizontalAdvance(
                     max((self.qualityCombo.itemText(i)
                          for i in range(self.qualityCombo.count())),
-                        default="")) + 56))
+                        default="")) + 56)))
             if self.qualityCombo.count() == 1:
                 self.qualityCombo.setEnabled(False)
                 self.qualityCombo.setToolTip("该来源仅提供这一档画质")
@@ -418,7 +434,13 @@ class HomeInterface(ScrollArea):
 
         if info.cover_url:
             w = CoverWorker(info.cover_url, self)
-            w.loaded.connect(self._set_cover)
+            generation = self._parse_generation
+
+            def apply_cover(data):
+                if generation == self._parse_generation and self._current is info:
+                    self._set_cover(data)
+
+            w.loaded.connect(apply_cover)
             w.finished.connect(lambda: self._cleanup_worker(w))
             self._workers.append(w)
             w.start()
@@ -435,6 +457,7 @@ class HomeInterface(ScrollArea):
             self._empty_result_retries = 1
             generation, text = self._parse_generation, self._parse_input
             self.progress.show()
+            self.emptyState.set_text("正在重试…", "站点暂未返回作品数据，正在自动重试一次。")
             QTimer.singleShot(1800, lambda: self._retry_empty_result(generation, text))
             return
         self._parse_done()
@@ -457,6 +480,7 @@ class HomeInterface(ScrollArea):
     def _parse_done(self):
         self._parse_running = False
         self.parseBtn.setEnabled(True)
+        self.parseBtn.setText("解析")
         self.progress.hide()
 
     def _set_cover(self, data: bytes):
@@ -467,6 +491,7 @@ class HomeInterface(ScrollArea):
     def _update_fps_badge(self, *_):
         """把当前选中档位的帧率做成徽章（≥50fps 绿、30fps 浅、更低橙）"""
         info = self._current
+        self.qualityCombo.setToolTip(self.qualityCombo.currentText() or "选择下载画质")
         fps = 0
         # 用 isHidden() 而不是 isVisible()：后者在窗口还没 show() 时恒为 False，
         # 会把帧率徽章误判成"不该显示"
@@ -515,9 +540,9 @@ class HomeInterface(ScrollArea):
         # 禁漫预览要靠 Cookie 换原图，但它不在 needs_cookie_for_source 里
         # （CDN 直链本身不需要 Cookie），所以这里显式带上
         cookie = ""
-        if needs_cookie_for_source(info.source) or info.source == "jmcomic":
+        if needs_cookie_for_source(info.source) or is_comic(info.source):
             cookie = context.cookie_for(info.source)
-        cover = self.coverLabel.pixmap() if info.source == "jmcomic" else None
+        cover = self.coverLabel.pixmap() if is_comic(info.source) else None
         dialog = PreviewDialog(
             info, url=url, label=label, cookies=cookie, cover=cover,
             parent=self)
@@ -536,7 +561,7 @@ class HomeInterface(ScrollArea):
         # 一次下载只生成一次文件名：多次调用 build_filename 会因跨秒得到不同
         # 时间戳，导致视频与其封面失去同名前缀（删除时找不到关联封面）
         fname = cfg.build_filename(info)
-        if info.source == "jmcomic":
+        if is_comic(info.source):
             folder = os.path.join(base, fname)
             self.ctx.manager.add(
                 info.play_url, folder, info.safe_title(60),
