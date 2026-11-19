@@ -194,6 +194,43 @@ def _has_cookie(context, names) -> bool:
         return False
 
 
+def block_heavy_resources(page,
+                          block_types: Tuple[str, ...] = (
+                              "image", "media", "font", "stylesheet")) -> None:
+    """拦截无头抓取不需要的静态媒体资源（图片/视频流/字体/样式表），显著降低页面等待耗时。"""
+    def _route(route):
+        try:
+            rtype = route.request.resource_type
+            if rtype in block_types:
+                route.abort()
+            else:
+                route.continue_()
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        page.route("**/*", _route)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def cache_context_cookies(context, profile_dir: Optional[str],
+                          domain_key: str) -> None:
+    """把浏览器上下文中的指定域名非空 Cookie 写入本地轻量缓存，供后续纯 HTTP 路径复用。"""
+    if not profile_dir:
+        return
+    try:
+        from .http_pool import write_profile_cookie_cache
+        pairs = []
+        for c in context.cookies():
+            if domain_key in (c.get("domain") or "") and c.get("name") and c.get("value"):
+                pairs.append(f"{c['name']}={c['value']}")
+        if pairs:
+            write_profile_cookie_cache(profile_dir, domain_key, "; ".join(pairs))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def fetch_aweme_detail(aweme_id: str,
                        profile_dir: Optional[str] = None) -> Optional[dict]:
     """用真实浏览器打开作品页，拦截详情接口 JSON，拿到完整 bit_rate（含 1080p+）
@@ -214,6 +251,8 @@ def fetch_aweme_detail(aweme_id: str,
             return None
         try:
             page = context.new_page()
+            block_heavy_resources(page)
+            block_heavy_resources(page)
 
             def on_response(resp):
                 if DETAIL_API_KEY not in resp.url or detail:
@@ -241,6 +280,8 @@ def fetch_aweme_detail(aweme_id: str,
                 except Exception:  # noqa: BLE001
                     break
                 waited += 100
+            if detail:
+                cache_context_cookies(context, profile_dir, "douyin.com")
             try:
                 page.keyboard.press("Escape")
             except Exception:  # noqa: BLE001
@@ -281,6 +322,7 @@ def fetch_user_posts(sec_uid: str, cookie: str = "",
                 f"无法启动本机 Edge 浏览器（批量抓取依赖它）：{e}")
         try:
             page = context.new_page()
+            block_heavy_resources(page)
 
             def on_response(resp):
                 nonlocal nickname, expected
@@ -377,6 +419,8 @@ def fetch_user_posts(sec_uid: str, cookie: str = "",
                     break
 
             logged_in = _is_logged_in(context)
+            if items:
+                cache_context_cookies(context, profile_dir, "douyin.com")
         finally:
             context.close()
             if browser:
