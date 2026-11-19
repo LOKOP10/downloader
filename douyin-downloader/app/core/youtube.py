@@ -16,6 +16,7 @@
 """
 import os
 import sys
+import tempfile
 from typing import Dict, List, Optional
 
 from .models import VideoInfo
@@ -310,12 +311,20 @@ def _friendly_error(exc: Exception) -> str:
 
 
 def _ydl_options(timeout: int) -> dict:
+    cache_dir = os.path.join(tempfile.gettempdir(), "douyin_dl_ytdlp_cache")
     opts = {
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
         "skip_download": True,       # 只取格式，下载交给本项目 downloader
         "noplaylist": True,          # 带 list= 参数的单个视频只解析视频本身
+        "cachedir": cache_dir,       # 复用 player JS / EJS 缓存，减少重复请求
+        "extractor_args": {
+            "youtube": {
+                # 优先走免 JS 签名挑战的客户端，显著缩短提取耗时
+                "player_client": ["android_vr", "ios", "web"],
+            }
+        },
         "socket_timeout": max(5, int(timeout or 15)),
         "retries": 2,
         "extractor_retries": 2,

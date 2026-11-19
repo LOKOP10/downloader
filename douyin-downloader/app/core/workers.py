@@ -94,11 +94,19 @@ class UserVideosWorker(QThread):
 
     def run(self):
         from .browser_bridge import BrowserBridgeError, fetch_user_posts
+        from .dyapi import fetch_user_posts_http
         try:
-            items, nickname, is_limited, expected = fetch_user_posts(
+            res = fetch_user_posts_http(
                 self.sec_uid, self.cookie,
-                profile_dir=self.profile_dir or None,
+                profile_dir=self.profile_dir or "",
                 progress_cb=lambda n, total: self.progress.emit(n, total))
+            if res is not None:
+                items, nickname, is_limited, expected = res
+            else:
+                items, nickname, is_limited, expected = fetch_user_posts(
+                    self.sec_uid, self.cookie,
+                    profile_dir=self.profile_dir or None,
+                    progress_cb=lambda n, total: self.progress.emit(n, total))
             parser = DouyinParser(self.cookie)
             infos = []
             for it in items:
@@ -241,7 +249,9 @@ class CoverWorker(QThread):
                 if data:
                     self.loaded.emit(data)
                 return
-            resp = requests.get(self.url, timeout=15, headers=headers)
+            from .http_pool import shared_requests_session
+            resp = shared_requests_session("cover").get(
+                self.url, timeout=15, headers=headers)
             if resp.ok and resp.content:
                 self.loaded.emit(resp.content)
         except requests.RequestException as e:
