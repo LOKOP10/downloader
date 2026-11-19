@@ -300,7 +300,7 @@ class ConverterInterfaceTest(unittest.TestCase):
             self.assertTrue(opened.call_args.args[0].isLocalFile())
             self.assertTrue(opened.call_args.args[0].toLocalFile().endswith("c.mp4"))
             QTest.mouseClick(w.openBtn, Qt.MouseButton.LeftButton)
-            self.assertEqual(Path(opened.call_args.args[0].toLocalFile()), Path(w.outputEdit.text()))
+            self.assertEqual(Path(opened.call_args.args[0].toLocalFile()).resolve(), Path(w.outputEdit.text()).resolve())
             w.resultList.setCurrentRow(1)
             self.assertFalse(w.previewBtn.isEnabled())
 

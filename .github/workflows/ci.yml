@@ -1,0 +1,92 @@
+name: CI Test & Build EXE
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 单元测试 (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: douyin-downloader
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: douyin-downloader/requirements.txt
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 运行全量单元测试
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: '1'
+        run: |
+          python -m unittest discover -s tests -p "test_*.py" -v
+
+  build-exe:
+    name: 编译 EXE 与安装包
+    needs: test
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: douyin-downloader
+        shell: pwsh
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: douyin-downloader/requirements.txt
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 使用 PyInstaller 编译应用
+        run: |
+          $iss = Get-Content -LiteralPath 'installer/setup.iss' -Raw -Encoding UTF8
+          $m = [regex]::Match($iss, '#define MyAppVersion "([^"]+)"')
+          if (-not $m.Success) { throw 'Missing MyAppVersion in installer/setup.iss' }
+          $ver = $m.Groups[1].Value
+          Write-Output "BUILD_VERSION=$ver" >> $env:GITHUB_ENV
+          pyinstaller --noconfirm --distpath "dist/$ver" build_exe.spec
+          powershell -NoProfile -ExecutionPolicy Bypass -File 'installer/sync_dist.ps1'
+
+      - name: 安装 Inno Setup 并构建安装包
+        run: |
+          choco install innosetup -y --no-progress
+          powershell -NoProfile -ExecutionPolicy Bypass -File 'installer/build_setup.ps1'
+
+      - name: 归档绿色版与安装包产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-downloader-${{ env.BUILD_VERSION }}-windows
+          path: |
+            douyin-downloader/dist/${{ env.BUILD_VERSION }}/
+            douyin-downloader/dist/*-setup.exe
+          retention-days: 14
