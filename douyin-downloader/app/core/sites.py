@@ -25,6 +25,8 @@ import requests
 
 from .applog import get_logger
 from .domain import platform_of_host, referer_for
+from .http_pool import (cffi_proxies, read_profile_cookie_cache,
+                        shared_cffi_session, shared_requests_session)
 from .models import VideoInfo, clean_cookie
 from .parser import DouyinParser, ParseError, PC_UA
 from .platform_registry import PLATFORM_ROUTES
@@ -153,6 +155,34 @@ _BILI_MIXIN_TAB = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
                    37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
                    22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52]
 _bili_wbi_cache = {"keys": None, "ts": 0}
+_bili_buvid_cache = {"cookie": "", "ts": 0}
+_bili_buvid_lock = threading.Lock()
+
+
+def _bili_guest_buvid() -> str:
+    """从 /x/frontend/finger/spi 拿游客 buvid3/buvid4 并缓存 12 小时，避免匿名请求触发风控降级。"""
+    now = time.time()
+    with _bili_buvid_lock:
+        if _bili_buvid_cache["cookie"] and now - _bili_buvid_cache["ts"] < 43200:
+            return _bili_buvid_cache["cookie"]
+    try:
+        sess = shared_requests_session("bilibili")
+        resp = sess.get(f"{BILI_API}/x/frontend/finger/spi", headers={
+            "User-Agent": PC_UA,
+            "Referer": "https://www.bilibili.com/",
+        }, timeout=8)
+        payload = resp.json() if resp.ok else {}
+        data = payload.get("data") or {}
+        b3, b4 = data.get("b_3") or "", data.get("b_4") or ""
+        if payload.get("code") == 0 and b3:
+            val = f"buvid3={b3}; b_nut={int(now)}" + (f"; buvid4={b4}" if b4 else "")
+            with _bili_buvid_lock:
+                _bili_buvid_cache["cookie"] = val
+                _bili_buvid_cache["ts"] = now
+            return val
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
 
 
 def _bili_headers(cookie: str = "") -> dict:
@@ -162,8 +192,9 @@ def _bili_headers(cookie: str = "") -> dict:
         "Origin": "https://www.bilibili.com",
         "Accept": "application/json, text/plain, */*",
     }
-    if cookie:
-        headers["Cookie"] = clean_cookie(cookie)
+    eff = clean_cookie(cookie) if cookie else _bili_guest_buvid()
+    if eff:
+        headers["Cookie"] = eff
     return headers
 
 
@@ -172,8 +203,9 @@ def _bili_get(path: str, params: dict, cookie: str = "",
     if signed:
         params = _bili_sign_params(params, cookie)
     try:
-        resp = requests.get(BILI_API + path, params=params,
-                            headers=_bili_headers(cookie), timeout=15)
+        resp = shared_requests_session("bilibili").get(
+            BILI_API + path, params=params,
+            headers=_bili_headers(cookie), timeout=15)
         data = resp.json()
     except (requests.RequestException, ValueError) as e:
         raise ParseError(f"B 站接口请求失败：{e}")
@@ -305,8 +337,9 @@ def parse_bilibili(url: str, cookie: str = "",
     # 短链还原
     if "b23.tv" in urllib.parse.urlparse(url).netloc.lower():
         try:
-            resp = requests.get(url, headers=_bili_headers(),
-                                timeout=15, allow_redirects=True)
+            resp = shared_requests_session("bilibili").get(
+                url, headers=_bili_headers(),
+                timeout=15, allow_redirects=True)
             url = resp.url
         except requests.RequestException as e:
             raise ParseError(f"短链解析失败：{e}")
@@ -764,17 +797,18 @@ def _x_fill_exact_sizes(info: VideoInfo) -> None:
 
     def probe(u):
         headers = {"User-Agent": PC_UA, "Referer": referer_for(u)}
+        sess = shared_requests_session("x")
         n = 0
         try:
-            r = requests.head(u, headers=headers, timeout=10,
-                              allow_redirects=True)
+            r = sess.head(u, headers=headers, timeout=10,
+                          allow_redirects=True)
             if r.status_code == 200:
                 n = int(r.headers.get("content-length") or 0)
             if n <= 0:
                 # 少数边缘节点对 HEAD 不回 Content-Length：
                 # 退回「1 字节 Range」，从 Content-Range 里读总长度
-                r = requests.get(u, headers=dict(headers, Range="bytes=0-0"),
-                                 timeout=10, allow_redirects=True)
+                r = sess.get(u, headers=dict(headers, Range="bytes=0-0"),
+                             timeout=10, allow_redirects=True)
                 m2 = re.search(r'/(\d+)\s*$',
                                r.headers.get("Content-Range") or "")
                 n = int(m2.group(1)) if m2 else 0
@@ -833,7 +867,7 @@ def _x_api(tweet_id: str, x_cookie: str = "",
     # 2) syndication：token + Googlebot UA（敏感内容大多也可取到）
     tombstone = False
     try:
-        resp = requests.get(
+        resp = shared_requests_session("x").get(
             "https://cdn.syndication.twimg.com/tweet-result",
             params={"id": tweet_id, "token": _syndication_token(tweet_id)},
             headers={"User-Agent": "Googlebot"}, timeout=15)
@@ -858,6 +892,33 @@ def _x_api(tweet_id: str, x_cookie: str = "",
     return _x_graphql(tweet_id, x_cookie, kv, profile_dir)
 
 
+_TW_GUEST_CACHE = {"token": "", "ts": 0.0}
+_TW_GUEST_LOCK = threading.Lock()
+
+
+def _x_guest_token(headers: dict, force: bool = False) -> str:
+    """进程内缓存 X guest_token（15 分钟 TTL），免去每次未登录请求都 POST activate.json。"""
+    now = time.time()
+    if not force:
+        with _TW_GUEST_LOCK:
+            if _TW_GUEST_CACHE["token"] and now - _TW_GUEST_CACHE["ts"] < 900:
+                return _TW_GUEST_CACHE["token"]
+    try:
+        g = shared_requests_session("x").post(
+            "https://api.x.com/1.1/guest/activate.json",
+            headers=headers, timeout=15)
+        if g.ok:
+            tok = g.json().get("guest_token", "") or ""
+            if tok:
+                with _TW_GUEST_LOCK:
+                    _TW_GUEST_CACHE["token"] = tok
+                    _TW_GUEST_CACHE["ts"] = now
+                return tok
+    except requests.RequestException:
+        pass
+    return ""
+
+
 def _x_graphql(tweet_id: str, x_cookie: str, kv: dict,
                profile_dir: str = "") -> VideoInfo:
     """调 GraphQL TweetResultByRestId；queryId 过期时自动刷新一次"""
@@ -866,23 +927,22 @@ def _x_graphql(tweet_id: str, x_cookie: str, kv: dict,
         "authorization": f"Bearer {TW_BEARER}",
         "content-type": "application/json",
     }
-    if kv.get("auth_token"):
+    is_guest = not bool(kv.get("auth_token"))
+    if not is_guest:
         headers["Cookie"] = clean_cookie(x_cookie)
         headers["x-csrf-token"] = kv.get("ct0", "")
     else:
-        try:
-            g = requests.post("https://api.x.com/1.1/guest/activate.json",
-                              headers=headers, timeout=15)
-            if g.ok:
-                headers["x-guest-token"] = g.json().get("guest_token", "")
-        except requests.RequestException:
-            pass
+        gt = _x_guest_token(headers)
+        if gt:
+            headers["x-guest-token"] = gt
 
     query = json.loads(json.dumps(_GQL_QUERY))
     query["variables"]["tweetId"] = tweet_id
 
+    sess = shared_requests_session("x")
+
     def _call(endpoint: str):
-        return requests.get(
+        return sess.get(
             endpoint,
             params={"variables": json.dumps(query["variables"], separators=(",", ":")),
                     "features": json.dumps(query["features"], separators=(",", ":")),
@@ -891,6 +951,11 @@ def _x_graphql(tweet_id: str, x_cookie: str, kv: dict,
 
     try:
         resp = _call(_gql_endpoint())
+        if is_guest and resp.status_code in (401, 403):
+            gt = _x_guest_token(headers, force=True)
+            if gt:
+                headers["x-guest-token"] = gt
+                resp = _call(_gql_endpoint())
     except requests.RequestException as e:
         raise ParseError(f"X 接口请求失败：{e}")
 
@@ -999,7 +1064,9 @@ def _x_browser(tweet_id: str, profile_dir: str) -> VideoInfo:
                 except Exception:  # noqa: BLE001
                     pass
 
+            from .browser_bridge import block_heavy_resources
             page = context.new_page()
+            block_heavy_resources(page, ("image", "font", "stylesheet"))
             page.on("response", on_response)
             page.goto(f"https://x.com/i/status/{tweet_id}",
                       wait_until="domcontentloaded", timeout=45000)
@@ -1149,12 +1216,7 @@ def _tw_syndication_to_info(data: dict, tweet_id: str) -> VideoInfo:
 # --------------------------------------------------------------------- #
 def parse_instagram(url: str, cookie: str = "",
                     profile_dir: str = "") -> VideoInfo:
-    """解析 Instagram 帖子（reel/p）：浏览器渲染为主，HTTP 直连并行兜底
-
-    IG 对普通 HTTP 请求只回 JS 空壳（带登录 Cookie 实测同样拿不到数据），
-    所以 HTTP 直连不能再串在主力链路前面白等（n≈1s）—— 改为并行：
-    浏览器拿到数据就直接返回，只有浏览器失败时才回头看 HTTP 的结果。
-    """
+    """解析 Instagram 帖子（reel/p）：纯 HTTP 三层快路径为主，浏览器渲染兜底。"""
     m = re.search(r'/(?:reel|reels|p)/([A-Za-z0-9_-]+)', url)
     if not m:
         raise ParseError("无法从链接中识别 Instagram 帖子 ID")
@@ -1163,7 +1225,12 @@ def parse_instagram(url: str, cookie: str = "",
     # 这个区别在下面两条兜底链路上都要用：reel 永远不该被当成图集。
     is_reel = bool(re.search(r'/reels?/', url))
 
-    # 1) HTTP 直连：后台线程跑（公开帖子的 og 标签/内嵌 JSON 仍可取到）
+    # 1) 纯 HTTP 快路径（Mobile info API → Embed HTML → Web GraphQL），0 浏览器 ~0.5s
+    fast = _instagram_http_fast(shortcode, cookie, profile_dir, is_reel)
+    if fast is not None:
+        return fast
+
+    # 2) HTTP 直连：后台线程跑（公开帖子的 og 标签/内嵌 JSON 仍可取到）
     got = {}
 
     def _http_try():
@@ -1175,7 +1242,7 @@ def parse_instagram(url: str, cookie: str = "",
     probe = threading.Thread(target=_http_try, daemon=True)
     probe.start()
 
-    # 2) 浏览器渲染（主力链路：登录态 / 受限内容只能靠它）
+    # 3) 浏览器渲染兜底（登录态 / 受限内容）
     try:
         return _instagram_browser(shortcode, cookie, profile_dir or None,
                                   is_reel)
@@ -1184,6 +1251,224 @@ def parse_instagram(url: str, cookie: str = "",
         if got.get("info"):
             return got["info"]
         raise
+
+
+def _ig_http_cffi_get(url: str, headers: dict, timeout: int = 12):
+    sess = shared_cffi_session("instagram", impersonate="chrome")
+    proxies = cffi_proxies(url)
+    kwargs = {"headers": headers, "timeout": timeout}
+    if proxies:
+        kwargs["proxies"] = proxies
+    return sess.get(url, **kwargs)
+
+
+def _ig_http_cffi_post(url: str, headers: dict, data: dict, timeout: int = 12):
+    sess = shared_cffi_session("instagram", impersonate="chrome")
+    proxies = cffi_proxies(url)
+    kwargs = {"headers": headers, "data": data, "timeout": timeout}
+    if proxies:
+        kwargs["proxies"] = proxies
+    return sess.post(url, **kwargs)
+
+
+def _ig_node_from_gql(media: dict, shortcode: str) -> dict:
+    """把 Instagram GraphQL / Embed 的 shortcode_media 结构转成统一 node。"""
+    if not isinstance(media, dict) or not media:
+        return {}
+    code = media.get("shortcode") or media.get("code") or ""
+    if code and code != shortcode:
+        return {}
+    out: dict = {}
+    vurl = (media.get("video_url") or "").replace("\\u0026", "&").replace("&amp;", "&")
+    if vurl:
+        dims = media.get("dimensions") or {}
+        w = int(dims.get("width") or 0)
+        h = int(dims.get("height") or 0)
+        out["quality_options"] = [(f"{w}×{h}" if w and h else "最高画质", vurl)]
+    sidecar = ((media.get("edge_sidecar_to_children") or {}).get("edges")) or []
+    if sidecar:
+        imgs = []
+        for edge in sidecar:
+            node = (edge or {}).get("node") or {}
+            if not out.get("quality_options") and node.get("is_video") and node.get("video_url"):
+                nv = str(node["video_url"]).replace("\\u0026", "&").replace("&amp;", "&")
+                out["quality_options"] = [("视频", nv)]
+            durl = (node.get("display_url") or "").replace("\\u0026", "&").replace("&amp;", "&")
+            if durl:
+                imgs.append(durl)
+        if imgs:
+            out["image_urls"] = imgs
+    cover = (media.get("display_url") or media.get("thumbnail_src") or "").replace("\\u0026", "&").replace("&amp;", "&")
+    if cover:
+        out["cover"] = cover
+    if media.get("video_duration"):
+        out["duration"] = media["video_duration"]
+    owner = media.get("owner") or {}
+    if owner.get("username"):
+        out["author"] = owner["username"]
+    edges = ((media.get("edge_media_to_caption") or {}).get("edges")) or []
+    if edges and isinstance(edges[0], dict):
+        out["title"] = ((edges[0].get("node") or {}).get("text")) or ""
+    out["like"] = ((media.get("edge_media_preview_like") or {}).get("count")) or 0
+    out["comment"] = ((media.get("edge_media_to_comment") or {}).get("count")) or 0
+    return out
+
+
+def _ig_info_from_node(node: dict, shortcode: str,
+                       is_reel: bool) -> Optional[VideoInfo]:
+    """把统一的 IG node 转成 VideoInfo；不满足帖子类型（如 reel 只有图）时返回 None。"""
+    if not node:
+        return None
+    opts = node.get("quality_options") or []
+    imgs = node.get("image_urls") or []
+    if is_reel and not opts:
+        return None
+    if not opts and not imgs:
+        return None
+
+    info = VideoInfo()
+    info.source = "instagram"
+    info.aweme_id = shortcode
+    info.title = node.get("title") or ""
+    info.author = node.get("author") or ""
+    info.digg_count = int(node.get("like") or 0)
+    info.comment_count = int(node.get("comment") or 0)
+    info.cover_url = node.get("cover") or (imgs[0] if imgs else "")
+    if node.get("duration"):
+        info.duration = int(float(node["duration"]) * 1000)
+
+    if opts:
+        info.play_url = opts[0][1]
+        info.play_url_candidates = [u for _, u in opts]
+        info.quality_options = opts
+        info.quality_sizes = node.get("quality_sizes") or {}
+        info.quality = opts[0][0]
+        return info
+
+    info.image_urls = imgs
+    info.is_image = True
+    return info
+
+
+def _instagram_http_fast(shortcode: str, cookie: str, profile_dir: str,
+                         is_reel: bool) -> Optional[VideoInfo]:
+    """参考 cobalt 三层纯 HTTP 策略（Mobile API → Embed HTML → Web GraphQL）。"""
+    eff_cookie = clean_cookie(cookie or "")
+    if not eff_cookie and profile_dir:
+        eff_cookie = clean_cookie(read_profile_cookie_cache(profile_dir, "instagram.com"))
+
+    # 1) Mobile API（带 sessionid Cookie 时稳定拿到高清版本与 Carousel）
+    if "sessionid=" in eff_cookie:
+        media_id = _ig_media_id_from_shortcode(shortcode)
+        if media_id:
+            try:
+                m_headers = {
+                    "User-Agent": "Instagram 275.0.0.27.98 Android (33/13; 280dpi; 720x1423; Xiaomi; Redmi 7; onclite; qcom; en_US; 458229237)",
+                    "x-ig-app-id": "936619743392459",
+                    "Cookie": eff_cookie,
+                }
+                resp = _ig_http_cffi_get(
+                    f"https://i.instagram.com/api/v1/media/{media_id}/info/",
+                    m_headers, timeout=10,
+                )
+                if resp.status_code == 200:
+                    items = (resp.json() or {}).get("items") or []
+                    if items:
+                        node = _ig_node_from_item(items[0], shortcode)
+                        info = _ig_info_from_node(node, shortcode, is_reel)
+                        if info is not None:
+                            return info
+            except Exception:  # noqa: BLE001
+                pass
+
+    base_headers = {
+        "User-Agent": PC_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if eff_cookie:
+        base_headers["Cookie"] = eff_cookie
+
+    # 2) Embed HTML（公开帖免登录即可直出 contextJSON）
+    try:
+        resp = _ig_http_cffi_get(
+            f"https://www.instagram.com/p/{shortcode}/embed/captioned/",
+            base_headers, timeout=10,
+        )
+        if resp.status_code == 200 and resp.text:
+            mm = re.search(r'"init",\[\],\[(.*?)\]\],', resp.text)
+            if mm:
+                embed_data = json.loads(mm.group(1))
+                ctx_raw = embed_data.get("contextJSON") if isinstance(embed_data, dict) else None
+                if ctx_raw:
+                    ctx_obj = json.loads(ctx_raw)
+                    gql_media = ((ctx_obj.get("gql_data") or {}).get("shortcode_media")
+                                 or (ctx_obj.get("gql_data") or {}).get("xdt_shortcode_media")
+                                 or {})
+                    node = _ig_node_from_gql(gql_media, shortcode)
+                    info = _ig_info_from_node(node, shortcode, is_reel)
+                    if info is not None:
+                        return info
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 3) Web GraphQL（从公开页提取 LSD / csrftoken 后直调 PolarisPostActionLoadPostQueryQuery）
+    try:
+        page_resp = _ig_http_cffi_get(
+            f"https://www.instagram.com/p/{shortcode}/",
+            base_headers, timeout=10,
+        )
+        html = page_resp.text if page_resp.status_code == 200 else ""
+        if html and "accounts/login" not in str(page_resp.url):
+            lsd_m = re.search(r'\["LSD",.*?\{"token":"([^"]+)"\}', html)
+            csrf_m = re.search(r'"csrf_token":"([^"]+)"', html)
+            lsd = lsd_m.group(1) if lsd_m else ""
+            csrf = csrf_m.group(1) if csrf_m else ""
+            gql_headers = {
+                "User-Agent": PC_UA,
+                "x-ig-app-id": "936619743392459",
+                "x-asbd-id": "129477",
+                "X-FB-Friendly-Name": "PolarisPostActionLoadPostQueryQuery",
+                "content-type": "application/x-www-form-urlencoded",
+                "Referer": f"https://www.instagram.com/p/{shortcode}/",
+            }
+            if lsd:
+                gql_headers["X-FB-LSD"] = lsd
+            if csrf:
+                gql_headers["X-CSRFToken"] = csrf
+            if eff_cookie:
+                gql_headers["Cookie"] = eff_cookie
+            elif csrf:
+                gql_headers["Cookie"] = f"csrftoken={csrf}"
+            gql_resp = _ig_http_cffi_post(
+                "https://www.instagram.com/graphql/query",
+                gql_headers,
+                data={
+                    "lsd": lsd,
+                    "fb_api_caller_class": "RelayModern",
+                    "fb_api_req_friendly_name": "PolarisPostActionLoadPostQueryQuery",
+                    "variables": json.dumps({
+                        "shortcode": shortcode,
+                        "fetch_tagged_user_count": None,
+                        "hoisted_comment_id": None,
+                        "hoisted_reply_id": None,
+                    }, separators=(",", ":")),
+                    "server_timestamps": "true",
+                    "doc_id": "8845758582119845",
+                },
+                timeout=10,
+            )
+            if gql_resp.status_code == 200:
+                gdata = (gql_resp.json() or {}).get("data") or {}
+                media = gdata.get("xdt_shortcode_media") or gdata.get("shortcode_media") or {}
+                node = _ig_node_from_gql(media, shortcode)
+                info = _ig_info_from_node(node, shortcode, is_reel)
+                if info is not None:
+                    return info
+    except Exception:  # noqa: BLE001
+        pass
+
+    return None
 
 
 def _instagram_http(shortcode: str, cookie: str = "",
@@ -1197,21 +1482,21 @@ def _instagram_http(shortcode: str, cookie: str = "",
             k, v = pair.split("=", 1)
             cookie_kv[k.strip()] = v.strip()
 
-    session = requests.Session()
-    session.headers.update({
+    session = shared_requests_session("instagram")
+    headers = {
         "User-Agent": PC_UA,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Referer": "https://www.instagram.com/",
-    })
+    }
     if cookie:
-        session.headers["Cookie"] = cookie
+        headers["Cookie"] = cookie
     if cookie_kv.get("csrftoken"):
-        session.headers["x-csrftoken"] = cookie_kv["csrftoken"]
+        headers["x-csrftoken"] = cookie_kv["csrftoken"]
 
     page_url = f"https://www.instagram.com/p/{shortcode}/"
     try:
-        resp = session.get(page_url, timeout=20, allow_redirects=True)
+        resp = session.get(page_url, headers=headers, timeout=20, allow_redirects=True)
     except requests.RequestException as e:
         raise ParseError(f"Instagram 请求失败：{e}")
     html = resp.text
@@ -1336,7 +1621,9 @@ def _instagram_browser(shortcode: str, cookie: str,
         except Exception as e:  # noqa: BLE001
             raise ParseError(f"无法启动本机 Edge 浏览器：{e}")
         try:
+            from .browser_bridge import block_heavy_resources, cache_context_cookies
             page = context.new_page()
+            block_heavy_resources(page)
             page.goto(f"https://www.instagram.com/p/{shortcode}/",
                       wait_until="domcontentloaded", timeout=45000)
             # 账号被 IG 限流 / 要求安全验证时，**所有**页面都会被 302 到
@@ -1379,6 +1666,8 @@ def _instagram_browser(shortcode: str, cookie: str,
                 sizes = _probe_sizes(page, [u for _lab, u in opts])
                 if sizes:
                     node["quality_sizes"] = sizes
+            if node:
+                cache_context_cookies(context, profile_dir, "instagram.com")
         finally:
             context.close()
             if browser:
@@ -1550,28 +1839,10 @@ def _probe_sizes(page, urls) -> dict:
     return {u: int(n) for u, n in res.items() if int(n or 0) > 0}
 
 
-def _ig_media_info(page, media_id: str, shortcode: str) -> dict:
-    """调 /api/v1/media/{id}/info/ 取本条帖子的精确数据。
-
-    返回统一结构的 dict（空 dict 表示不可用）。
-    关键校验：返回的 code 必须等于目标 shortcode，否则丢弃。
-    """
-    if not media_id:
+def _ig_node_from_item(it: dict, shortcode: str) -> dict:
+    """把 IG /api/v1/media/{id}/info/ 返回的 item 转成统一 node；code 不一致则返回空。"""
+    if not isinstance(it, dict):
         return {}
-    try:
-        text = page.evaluate(_IG_INFO_JS, str(media_id))
-        data = json.loads(text) if text else {}
-    except Exception:  # noqa: BLE001
-        return {}
-    if not isinstance(data, dict):
-        return {}
-
-    items = data.get("items") or []
-    if not items:
-        return {}
-    it = items[0]
-
-    # 严格校验：必须是目标帖子，避免拿到推荐流里的其他内容
     code = it.get("code") or ""
     if code and code != shortcode:
         return {}
@@ -1593,7 +1864,6 @@ def _ig_media_info(page, media_id: str, shortcode: str) -> dict:
     cands = ((it.get("image_versions2") or {}).get("candidates")) or []
     if cands:
         out["cover"] = (cands[0].get("url") or "").replace("&amp;", "&")
-        # 图集：carousel_media 才是真正的多图
         carousel = it.get("carousel_media") or []
         if carousel:
             imgs = []
@@ -1618,6 +1888,28 @@ def _ig_media_info(page, media_id: str, shortcode: str) -> dict:
     elif user.get("full_name"):
         out["author"] = user["full_name"]
     return out
+
+
+def _ig_media_info(page, media_id: str, shortcode: str) -> dict:
+    """调 /api/v1/media/{id}/info/ 取本条帖子的精确数据。
+
+    返回统一结构的 dict（空 dict 表示不可用）。
+    关键校验：返回的 code 必须等于目标 shortcode，否则丢弃。
+    """
+    if not media_id:
+        return {}
+    try:
+        text = page.evaluate(_IG_INFO_JS, str(media_id))
+        data = json.loads(text) if text else {}
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(data, dict):
+        return {}
+
+    items = data.get("items") or []
+    if not items:
+        return {}
+    return _ig_node_from_item(items[0], shortcode)
 
 
 def _ig_html_node(html: str, shortcode: str) -> dict:
@@ -1933,7 +2225,7 @@ def _xhs_browser(url: str, note_id: str, token: str,
     except ImportError:
         raise ParseError("缺少 playwright，无法渲染小红书页面")
 
-    from .browser_bridge import launch_clean
+    from .browser_bridge import block_heavy_resources, launch_clean
 
     pw = sync_playwright().start()
     ctx = None
@@ -1950,6 +2242,7 @@ def _xhs_browser(url: str, note_id: str, token: str,
         #     落到 /login?redirectPath=... 拿不到 SSR 数据
         #   - 带 xsec_token 的笔记 URL 游客可直接访问
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        block_heavy_resources(page, ("image", "media", "font"))
 
         # ---- 关键：冷启动预热 ----
         # 实测：全新 profile 的"第一次导航"若直接打笔记页，服务端不下发
@@ -1964,11 +2257,11 @@ def _xhs_browser(url: str, note_id: str, token: str,
                           wait_until="domcontentloaded", timeout=45000)
             except Exception:
                 pass
-            for _ in range(10):
+            for _ in range(40):
                 if _xhs_has_device_cookie(ctx):
                     break
                 try:
-                    page.wait_for_timeout(1000)
+                    page.wait_for_timeout(200)
                 except Exception:
                     break
 
@@ -1994,10 +2287,8 @@ def _xhs_browser(url: str, note_id: str, token: str,
                         and '"imageList"' in h)):
                 ready = True
                 break
-            page.wait_for_timeout(1000)
-            waited += 1000
-        if waited:
-            page.wait_for_timeout(600)
+            page.wait_for_timeout(150)
+            waited += 150
 
         cur = page.url or ""
         cur_dec = urllib.parse.unquote(cur)
@@ -2183,8 +2474,8 @@ def _xhs_http(url: str, note_id: str, token: str,
         target = (f"{XHS_HOST}/explore/{note_id}"
                   f"?xsec_token={urllib.parse.quote(token)}&xsec_source=pc_share")
     try:
-        resp = requests.get(target, headers=headers, timeout=20,
-                            allow_redirects=True)
+        resp = shared_requests_session("xhs").get(
+            target, headers=headers, timeout=20, allow_redirects=True)
     except requests.RequestException as e:
         raise ParseError(f"小红书请求失败：{e}")
 
@@ -2563,9 +2854,10 @@ def _ph_probe_sizes(urls: List[str], page_url: str) -> dict:
 
     def probe(u: str) -> None:
         headers = {"User-Agent": PC_UA, "Referer": page_url, "Range": "bytes=0-0"}
+        sess = shared_requests_session("pornhub")
         n = 0
         try:
-            r = requests.get(u, headers=headers, timeout=15, allow_redirects=True)
+            r = sess.get(u, headers=headers, timeout=15, allow_redirects=True)
             m = re.search(r'/(\d+)\s*$', r.headers.get("Content-Range") or "")
             n = int(m.group(1)) if m else 0
             if n <= 0 and r.status_code == 200:
@@ -2608,13 +2900,13 @@ def parse_pornhub(url: str) -> VideoInfo:
     #  · get_media 认会话 Cookie —— 裸 requests.get 会回**空数组**（不是报错，
     #    很容易误判成「这视频没档位」）
     #  · 站点按 IP 限流高频请求，保持同一会话更接近真实浏览器
-    session = requests.Session()
-    session.headers.update(_ph_headers())
+    session = shared_requests_session("pornhub")
+    ph_headers = _ph_headers()
 
     html, flashvars, last_err = "", {}, ""
     for attempt in range(PH_RETRIES):
         try:
-            r = session.get(page_url, timeout=(10, 30))
+            r = session.get(page_url, headers=ph_headers, timeout=(10, 30))
         except Exception as e:  # noqa: BLE001
             last_err = f"连接失败（{e}）"
             r = None
@@ -2742,10 +3034,9 @@ def _hn_session():
     所以下载链路不用改。
     """
     try:
-        from curl_cffi import requests as cffi_requests
+        session = shared_cffi_session("hanime1", impersonate="chrome")
     except ImportError as e:  # pragma: no cover - 打包时必带
         raise ParseError(f"缺少 curl_cffi 组件，无法解析 hanime1（{e}）") from e
-    session = cffi_requests.Session(impersonate="chrome")
     session.headers.update({
         "User-Agent": PC_UA,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -2830,8 +3121,9 @@ def _hn_probe_sizes(urls: List[str]) -> dict:
     def probe(u: str) -> None:
         n = 0
         try:
-            r = requests.get(u, headers={"User-Agent": PC_UA, "Range": "bytes=0-0"},
-                             timeout=15, allow_redirects=True)
+            r = shared_requests_session("hanime1_cdn").get(
+                u, headers={"User-Agent": PC_UA, "Range": "bytes=0-0"},
+                timeout=15, allow_redirects=True)
             m = re.search(r'/(\d+)\s*$', r.headers.get("Content-Range") or "")
             n = int(m.group(1)) if m else 0
             if n <= 0 and r.status_code == 200:
@@ -2874,10 +3166,14 @@ def parse_hanime1(url: str) -> VideoInfo:
     page_url = f"{HN_HOST}/watch?v={vid}"
     session = _hn_session()
 
+    proxies = cffi_proxies(page_url)
     html, last_err = "", ""
     for attempt in range(HN_RETRIES):
         try:
-            r = session.get(page_url, timeout=(10, 30))
+            kwargs = {"timeout": (10, 30)}
+            if proxies:
+                kwargs["proxies"] = proxies
+            r = session.get(page_url, **kwargs)
         except Exception as e:  # noqa: BLE001
             last_err = f"连接失败（{type(e).__name__}: {e}）"
             r = None

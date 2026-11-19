@@ -19,6 +19,7 @@ from typing import List, Optional, Tuple
 
 import requests
 
+from .http_pool import shared_requests_session
 from .models import VideoInfo, clean_cookie
 
 MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
@@ -39,17 +40,20 @@ class DouyinParser:
         self.cookie = cookie.strip()
         self.timeout = timeout
         self.profile_dir = profile_dir or ""
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": PC_UA,
-            "Referer": "https://www.douyin.com/",
-            "Accept": "*/*",
-        })
+        self.session = shared_requests_session("douyin")
         # Cookie 里可能含非 Latin-1 字符（昵称类字段），requests 发 header
         # 时按 latin-1 编码会抛 UnicodeEncodeError，必须先清洗
         self.cookie = clean_cookie(self.cookie)
+
+    def _req_headers(self, ua: str = PC_UA) -> dict:
+        headers = {
+            "User-Agent": ua,
+            "Referer": "https://www.douyin.com/",
+            "Accept": "*/*",
+        }
         if self.cookie:
-            self.session.headers["Cookie"] = self.cookie
+            headers["Cookie"] = self.cookie
+        return headers
 
     # ------------------------------------------------------------------ #
     # 链接处理
@@ -69,7 +73,8 @@ class DouyinParser:
     def resolve(self, url: str) -> str:
         """跟随短链重定向，返回最终 URL"""
         try:
-            resp = self.session.get(url, timeout=self.timeout, allow_redirects=True)
+            resp = self.session.get(url, headers=self._req_headers(),
+                                    timeout=self.timeout, allow_redirects=True)
             return resp.url
         except requests.RequestException as e:
             raise ParseError(f"链接请求失败：{e}")
@@ -113,9 +118,21 @@ class DouyinParser:
         if kind == "user":
             raise ParseError("检测到用户主页链接，请前往「批量下载」页面使用")
 
-        # 浏览器详情接口（带完整 bit_rate 档位 + 文件大小）与 HTTP 三路并行跑：
-        # 它要启动 Edge + 加载页面（约 1.5s），串行会白等 HTTP 那一头（约 0.7s）
+        # 优先纯 HTTP 签名详情（curl_cffi + a_bogus + websign），命中缓存或手填
+        # uifid 时 0 浏览器即可拿全量 bit_rate 与动图；仅在未缓存或直连失败时回退 Edge。
+        from .dyapi.client import _resolve_cookie
+        _, dy_kv, _ = _resolve_cookie(self.cookie, self.profile_dir)
+        from .dyapi.websign import pick_uifid
+        has_uifid = bool(pick_uifid(dy_kv))
+
         rich_box = {}
+        native_box = {}
+
+        def _native_try():
+            try:
+                native_box["info"] = self._from_native_detail(item_id)
+            except Exception:  # noqa: BLE001
+                pass
 
         def _browser_try():
             try:
@@ -123,16 +140,18 @@ class DouyinParser:
             except Exception:  # noqa: BLE001 - 补全失败保留 HTTP 结果
                 pass
 
+        native_job = None
         browser_job = None
-        if self.profile_dir:
+        if has_uifid:
+            native_job = threading.Thread(target=_native_try, daemon=True)
+            native_job.start()
+        elif self.profile_dir:
             browser_job = threading.Thread(target=_browser_try, daemon=True)
             browser_job.start()
 
         errors = []
         info: Optional[VideoInfo] = None
-        # 分享页是当前唯一稳定可用的数据源，先试（把链接类型当提示，先请求
-        # 对应类型的分享页，少发一次注定拿不到数据的请求）；iteminfo /
-        # detail 接口自 2026 年起被风控门禁（返回 200 空体），留作兜底
+        # 分享页是轻量兜底数据源；iteminfo / detail 无签接口留作最后兜底
         for name, fetcher in (
                 ("_from_share_page", lambda: self._from_share_page(item_id, kind)),
                 ("_from_iteminfo_api", lambda: self._from_iteminfo_api(item_id)),
@@ -143,28 +162,35 @@ class DouyinParser:
                     break
             except Exception as e:  # noqa: BLE001 - 聚合所有尝试的失败原因
                 errors.append(f"{name}: {e}")
-        if not info:
-            # HTTP 三路全军覆没：并行的浏览器详情接口若已拿到数据就直接用
-            # （它本来只为补全高清档而启动，顺手当兜底，别白扔）
-            if browser_job is not None:
-                browser_job.join(timeout=30)
-                rich = rich_box.get("info")
-                if rich:
-                    return rich
-            raise ParseError("作品信息获取失败。" + "；".join(errors[-2:]))
 
-        # 分享页/列表接口的 bit_rate 常缺高清档，用真实浏览器的详情接口补全；
-        # 图文作品的分享页还会退化成纯静图，动图视频轨只在详情接口里，需要合并
-        if browser_job is not None:
+        rich = None
+        if native_job is not None:
+            native_job.join(timeout=15)
+            rich = native_box.get("info")
+            if not rich and self.profile_dir:
+                # 缓存的 uifid 失效或接口被风控时回退真实浏览器，并顺带刷新缓存
+                try:
+                    rich = self._from_browser_detail(item_id)
+                except Exception:  # noqa: BLE001
+                    rich = None
+        elif browser_job is not None:
             browser_job.join(timeout=30)
             rich = rich_box.get("info")
+
+        if not info:
             if rich:
-                if info.is_image:
-                    info = self._merge_image_detail(info, rich)
-                # 分辨率相同时帧率更高也算"更全"（分享页常只有 1080p30，
-                # 浏览器详情接口才给 1080p60 那条）
-                elif self._quality_key(rich) > self._quality_key(info):
-                    return rich
+                return rich
+            raise ParseError("作品信息获取失败。" + "；".join(errors[-2:]))
+
+        # 分享页/列表接口的 bit_rate 常缺高清档，用详情接口补全；
+        # 图文作品的分享页还会退化成纯静图，动图视频轨只在详情接口里，需要合并
+        if rich:
+            if info.is_image:
+                info = self._merge_image_detail(info, rich)
+            # 分辨率相同时帧率更高也算"更全"（分享页常只有 1080p30，
+            # 详情接口才给 1080p60 那条）
+            elif self._quality_key(rich) > self._quality_key(info):
+                return rich
         return info
 
     @staticmethod
@@ -203,6 +229,16 @@ class DouyinParser:
                 fps = max(fps, int(mf.group(1)))
         return res, fps
 
+    def _from_native_detail(self, item_id: str) -> Optional[VideoInfo]:
+        """纯 Python 签名直连 web 详情接口，免启动浏览器。"""
+        from .dyapi import fetch_aweme_detail_http
+        item = fetch_aweme_detail_http(
+            item_id, cookie=self.cookie, profile_dir=self.profile_dir
+        )
+        if not item:
+            return None
+        return self._build_info(item)
+
     def _from_browser_detail(self, item_id: str) -> Optional[VideoInfo]:
         """浏览器打开作品页 → 拦截 web 详情接口 → 拿到完整 bit_rate 档位"""
         from .browser_bridge import fetch_aweme_detail
@@ -213,7 +249,7 @@ class DouyinParser:
 
     def _from_iteminfo_api(self, item_id: str) -> Optional[VideoInfo]:
         api = f"https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids={item_id}"
-        resp = self.session.get(api, headers={"User-Agent": MOBILE_UA}, timeout=self.timeout)
+        resp = self.session.get(api, headers=self._req_headers(MOBILE_UA), timeout=self.timeout)
         data = resp.json()
         items = data.get("item_list") or []
         if not items:
@@ -236,7 +272,7 @@ class DouyinParser:
         for attempt in range(attempts):
             for page in pages:
                 url = f"https://www.iesdouyin.com/share/{page}/{item_id}/"
-                resp = self.session.get(url, headers={"User-Agent": MOBILE_UA},
+                resp = self.session.get(url, headers=self._req_headers(MOBILE_UA),
                                         timeout=self.timeout)
                 data = self._extract_page_json(resp.text)
                 if data:
@@ -256,7 +292,7 @@ class DouyinParser:
             "os_version": "2333",
         }
         api = "https://www.iesdouyin.com/aweme/v1/aweme/detail/"
-        resp = self.session.get(api, params=params, headers={"User-Agent": MOBILE_UA},
+        resp = self.session.get(api, params=params, headers=self._req_headers(MOBILE_UA),
                                 timeout=self.timeout)
         data = resp.json()
         item = data.get("aweme_detail")
@@ -468,7 +504,7 @@ class DouyinParser:
             "_signature": "",
         }
         resp = self.session.get(api, params=params,
-                                headers={"User-Agent": MOBILE_UA}, timeout=self.timeout)
+                                headers=self._req_headers(MOBILE_UA), timeout=self.timeout)
         data = resp.json()
         aweme_list = data.get("aweme_list") or []
         nickname = ""
