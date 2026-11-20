@@ -126,9 +126,9 @@ class UserVideosWorker(QThread):
 
 
 class LoginWorker(QThread):
-    """打开有头 Edge 供用户登录（douyin / instagram / x / bilibili / xiaohongshu / jmcomic）"""
+    """打开有头 Edge 供用户登录（douyin / instagram / x / bilibili / xiaohongshu / jmcomic / youtube）"""
     done = Signal(bool, str)
-    cookie_ready = Signal(str)      # 登录后导出的 Cookie（B 站 / 小红书用）
+    cookie_ready = Signal(str)      # 登录后导出的 Cookie（B 站 / 小红书 / 禁漫 / YouTube 用）
 
     def __init__(self, profile_dir: str, site: str = "douyin", parent=None):
         super().__init__(parent)
@@ -136,10 +136,12 @@ class LoginWorker(QThread):
         self.site = site
 
     def run(self):
-        from .browser_bridge import (BrowserBridgeError, dump_cookies, login,
-                                     login_bilibili,
+        import os
+        from .browser_bridge import (BrowserBridgeError, YT_COOKIES_FILENAME,
+                                     dump_cookies, login, login_bilibili,
                                      login_instagram, login_jmcomic, login_x,
-                                     login_xiaohongshu)
+                                     login_xiaohongshu, login_youtube,
+                                     read_youtube_cookie_header)
         try:
             if self.site == "instagram":
                 ok, msg = login_instagram(self.profile_dir)
@@ -151,10 +153,21 @@ class LoginWorker(QThread):
                 ok, msg = login_xiaohongshu(self.profile_dir)
             elif self.site == "jmcomic":
                 ok, msg = login_jmcomic(self.profile_dir)
+            elif self.site == "youtube":
+                ok, msg = login_youtube(self.profile_dir)
             else:
                 ok, msg = login(self.profile_dir)
-            if ok and self.site in ("bilibili", "xiaohongshu",
-                                    "jmcomic"):
+            if ok and self.site == "youtube":
+                yt_file = os.path.join(self.profile_dir, YT_COOKIES_FILENAME)
+                cookie = read_youtube_cookie_header(yt_file)
+                if cookie:
+                    self.cookie_ready.emit(cookie)
+                if os.path.isfile(yt_file) or cookie:
+                    msg = "登录成功，已保存 YouTube 登录态"
+                else:
+                    ok = False
+                    msg = "登录成功但未导出 Cookie，请重试"
+            elif ok and self.site in ("bilibili", "xiaohongshu", "jmcomic"):
                 # 解析走 HTTP 客户端，需要把浏览器登录态导成 Cookie
                 domain, label = {
                     "bilibili": ("bilibili.com", "B 站"),

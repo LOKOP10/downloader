@@ -18,6 +18,7 @@ SOURCE_COOKIE_KEY = {
     "bilibili": "bili_cookie",
     "xiaohongshu": "xhs_cookie",
     "jmcomic": "jm_cookie",
+    "youtube": "yt_cookie",
 }
 
 
@@ -36,6 +37,8 @@ class SiteContext:
     xhs_profile_dir: str = ""
     jm_cookie: str = ""               # 禁漫天堂
     jm_profile_dir: str = ""
+    yt_cookie: str = ""               # YouTube
+    yt_profile_dir: str = ""
 
     @classmethod
     def from_config(cls, config) -> "SiteContext":
@@ -55,6 +58,8 @@ class SiteContext:
             xhs_profile_dir=config.xhs_profile_dir,
             jm_cookie=config.get("jm_cookie", ""),
             jm_profile_dir=config.jm_profile_dir,
+            yt_cookie=config.get("yt_cookie", ""),
+            yt_profile_dir=config.yt_profile_dir,
         )
 
     def cookie_for(self, source: str) -> str:

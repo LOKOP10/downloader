@@ -22,7 +22,7 @@ pyinstaller>=6.0.0
 # YouTube 解析：播放地址要先解 nsig（播放器 JS 签名）并过 JS 挑战，交给 yt-dlp。
 # 只当解析器用（取 formats），下载与 ffmpeg 合并仍由本项目负责。
 # yt-dlp-ejs 是官方 JS 挑战求解脚本，配合 Playwright 自带的 node.exe 使用。
-yt-dlp>=2026.8.19
+yt-dlp>=2026.10.26
 yt-dlp-ejs>=0.8.0
 
 # 禁漫天堂（本子解析/下载，图片自动解码）

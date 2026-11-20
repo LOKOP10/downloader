@@ -31,7 +31,8 @@ from . import workspace as W
 from .account_card import (AccountRow, STATE_COOKIE, STATE_LOGIN, STATE_NONE,
                            profile_logged_in)
 from .cookie_dialog import (BILI_FIELDS, CookieDialog, DOUYIN_FIELDS,
-                            INS_FIELDS, JM_FIELDS, X_FIELDS, XHS_FIELDS)
+                            INS_FIELDS, JM_FIELDS, X_FIELDS, XHS_FIELDS,
+                            YT_FIELDS)
 
 # 平台账号规格：一行 = 一个平台。
 # (key, 图标, 显示名, 说明, cookie 配置键, cookie 特征字段, profile 目录属性)
@@ -57,6 +58,9 @@ _PLATFORM_SPECS = [
     ("jmcomic", FIF.PHOTO, "禁漫天堂",
      "大部分内容免登录，登录后可解析受限本子",
      "jm_cookie", "AVS", "jm_profile_dir"),
+    ("youtube", FIF.MOVIE, "YouTube",
+     "遇到「请登录以确认您不是机器人」或年龄限制时使用（推荐点网页登录）",
+     "yt_cookie", "SAPISID", "yt_profile_dir"),
 ]
 
 # 填 Cookie 对话框的文案与字段
@@ -74,6 +78,8 @@ _COOKIE_SPECS = {
                               "→ Cookies → xiaohongshu.com 中找到以下字段：", XHS_FIELDS),
     "jmcomic": ("禁漫", "在浏览器登录 18comic.vip 后，按 F12 → 应用/Application "
                         "→ Cookies 中找到 AVS：", JM_FIELDS),
+    "youtube": ("YouTube", "强烈建议优先点击右侧「网页登录」（部分核心 Cookie 带 HttpOnly，"
+                           "控制台可能看不到）。若手动填写，请在 youtube.com Cookies 中查找：", YT_FIELDS),
 }
 
 # 登录成功后补一句"拿到了什么"，比单纯「登录成功」有用
@@ -84,6 +90,7 @@ _LOGIN_GAIN = {
     "bilibili": "已解锁 1080P 及以上",
     "xiaohongshu": "解析更稳定",
     "jmcomic": "可解析受限本子",
+    "youtube": "可解析需登录验证及年龄限制视频",
 }
 
 _NAME_OF = {spec[0]: spec[2] for spec in _PLATFORM_SPECS}

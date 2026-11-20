@@ -19,7 +19,9 @@ if getattr(sys, "frozen", False):
     from app.core.runtime_temp import configure_runtime_temp
     configure_runtime_temp(BASE_DIR)
 
-from PySide6.QtCore import Qt
+import threading
+
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QApplication
 
 
@@ -60,6 +62,18 @@ def main():
              log_path() or "（不可写）", sys.version.split()[0])
     window = MainWindow(config)
     window.show()
+
+    def _warmup_douyin():
+        def _run():
+            try:
+                from app.core.browser_bridge import warmup_douyin_cookies
+                ok = warmup_douyin_cookies(config.profile_dir, config.get("cookie", ""))
+                log.debug("抖音 Cookie 后台预热：%s", "就绪" if ok else "跳过/未就绪")
+            except Exception:  # noqa: BLE001
+                pass
+        threading.Thread(target=_run, daemon=True, name="dy-warmup").start()
+
+    QTimer.singleShot(500, _warmup_douyin)
     code = app.exec()
     log.info("退出，返回码 %s", code)
     sys.exit(code)

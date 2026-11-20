@@ -134,6 +134,7 @@ begin
       DelTree(ExpandConstant('{app}\edge_profile_bili'), True, True, True);
       DelTree(ExpandConstant('{app}\edge_profile_xhs'), True, True, True);
       DelTree(ExpandConstant('{app}\edge_profile_jm'), True, True, True);
+      DelTree(ExpandConstant('{app}\edge_profile_yt'), True, True, True);
       DeleteFile(ExpandConstant('{app}\config.json'));
       DeleteFile(ExpandConstant('{app}\manga_library.json'));
       DeleteFile(ExpandConstant('{app}\manga_library.json.bak'));

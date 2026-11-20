@@ -13,6 +13,7 @@
 注入的假 yt_dlp 通过 unittest.mock.patch.dict(sys.modules, ...) 安装，
 退出 with 时自动还原，不会污染其它测试。
 """
+import os
 import sys
 import types
 import unittest
@@ -552,6 +553,139 @@ class ParseYoutubeTest(unittest.TestCase):
         err = _FakeDownloadError("Signature solving failed: some challenge")
         text, _ = self._parse_fail(error=err)
         self.assertIn("签名解析失败", text)
+
+    def test_bot_check_error_with_curly_apostrophe_is_friendly(self):
+        err = _FakeDownloadError(
+            "ERROR: [youtube] hIJK0cp5y0k: Sign in to confirm you\u2019re not a bot."
+        )
+        text, _ = self._parse_fail(error=err)
+        self.assertIn("登录或人机验证", text)
+
+    def test_cookie_and_profile_cookiefile_are_passed_and_cleaned(self):
+        import tempfile
+        mods, calls = fake_yt_dlp(info=self._sample_info())
+        seen_content = {}
+
+        class CapturingYDL(mods["yt_dlp"].YoutubeDL):
+            def extract_info(self, url, download=True):
+                cf = calls["options"].get("cookiefile")
+                if cf and os.path.isfile(cf):
+                    with open(cf, "r", encoding="utf-8") as fh:
+                        seen_content["raw"] = fh.read()
+                return super().extract_info(url, download=download)
+
+        mods["yt_dlp"].YoutubeDL = CapturingYDL
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # 1) profile_dir/yt_cookies.txt 优先
+            yt_file = os.path.join(tmp, "yt_cookies.txt")
+            with open(yt_file, "w", encoding="utf-8") as fh:
+                fh.write("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1999999999\tSAPISID\tabc_sapi\n")
+            with patch.dict(sys.modules, mods), \
+                    patch("app.core.youtube._proxy_url", return_value=""), \
+                    patch("app.core.youtube._node_path", return_value=""):
+                parse_youtube(WATCH_URL, cookie="SAPISID=ignored", profile_dir=tmp)
+            self.assertIn("SAPISID\tabc_sapi", seen_content.get("raw", ""))
+            self.assertEqual(
+                calls["options"]["extractor_args"]["youtube"]["player_client"],
+                ["tv_samsung", "web"],
+            )
+            self.assertEqual(
+                calls["options"]["extractor_args"]["youtube"]["player_skip"],
+                ["webpage"],
+            )
+            self.assertFalse(os.path.exists(calls["options"]["cookiefile"]))
+
+            # 2) 无 yt_cookies.txt 时回退手填 cookie 串
+            seen_content.clear()
+            os.remove(yt_file)
+            with patch.dict(sys.modules, mods), \
+                    patch("app.core.youtube._proxy_url", return_value=""), \
+                    patch("app.core.youtube._node_path", return_value=""):
+                parse_youtube(WATCH_URL, cookie="SAPISID=manual_123; SID=sid_456", profile_dir=tmp)
+            self.assertIn("SAPISID\tmanual_123", seen_content.get("raw", ""))
+            self.assertIn("SID\tsid_456", seen_content.get("raw", ""))
+            self.assertFalse(os.path.exists(calls["options"]["cookiefile"]))
+
+    def test_netscape_cookie_roundtrip_and_login_keys(self):
+        import tempfile
+        from app.core.browser_bridge import (
+            YT_LOGIN_COOKIE_KEYS,
+            read_youtube_cookie_header,
+            write_netscape_cookies,
+        )
+        for guest in ("PREF", "YSC", "VISITOR_INFO1_LIVE", "LOGIN_INFO"):
+            self.assertNotIn(guest, YT_LOGIN_COOKIE_KEYS)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "yt_cookies.txt")
+            ok = write_netscape_cookies([
+                {"domain": ".youtube.com", "name": "SAPISID", "value": "v1", "path": "/", "secure": True, "expires": 1800000000},
+                {"domain": ".google.com", "name": "SID", "value": "g1", "path": "/", "secure": False, "expires": 0},
+                {"domain": ".example.com", "name": "IGNORE", "value": "x", "path": "/", "secure": False, "expires": 0},
+            ], out)
+            self.assertTrue(ok)
+            txt = Path(out).read_text(encoding="utf-8")
+            self.assertIn("SAPISID\tv1", txt)
+            self.assertIn("SID\tg1", txt)
+            self.assertNotIn("IGNORE", txt)
+            hdr = read_youtube_cookie_header(out)
+            self.assertEqual(hdr, "SAPISID=v1")
+
+    def test_youtube_account_registered_in_config_and_settings(self):
+        import tempfile
+        from app.core.config import Config
+        from app.core.site_ctx import SiteContext
+        from app.view.setting_interface import _COOKIE_SPECS, _LOGIN_GAIN, _PLATFORM_SPECS
+
+        keys = [spec[0] for spec in _PLATFORM_SPECS]
+        self.assertIn("youtube", keys)
+        self.assertIn("youtube", _COOKIE_SPECS)
+        self.assertIn("youtube", _LOGIN_GAIN)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(os.path.join(tmp, "config.json"))
+            cfg.set("yt_cookie", "SAPISID=test_sapi")
+            ctx = SiteContext.from_config(cfg)
+            self.assertEqual(ctx.yt_cookie, "SAPISID=test_sapi")
+            self.assertTrue(ctx.yt_profile_dir.endswith("edge_profile_yt"))
+            self.assertEqual(ctx.cookie_for("youtube"), "SAPISID=test_sapi")
+
+    def test_player_js_disk_cache_reuses_downloaded_code(self):
+        import tempfile
+        from yt_dlp.extractor.youtube._video import YoutubeIE
+        from app.core import youtube as yt_mod
+
+        calls = {"n": 0}
+        fake_code = "var _yt_player={};" + ("x" * 15000)
+
+        def fake_orig(ie_self, video_id, player_url, fatal=True):
+            calls["n"] += 1
+            ie_self._code_cache[ie_self._player_js_cache_key(player_url)] = fake_code
+            return fake_code
+
+        class FakeIE:
+            def __init__(self):
+                self._code_cache = {}
+
+            @staticmethod
+            def _player_js_cache_key(url):
+                return "testkey-main"
+
+        orig_method = YoutubeIE._load_player
+        YoutubeIE._load_player = fake_orig
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                with patch.object(yt_mod, "_player_js_cache_dir", return_value=tmp):
+                    yt_mod._install_player_js_disk_cache()
+                    ie1 = FakeIE()
+                    c1 = YoutubeIE._load_player(ie1, "vid1", "https://yt/s/player/testkey/base.js")
+                    ie2 = FakeIE()
+                    c2 = YoutubeIE._load_player(ie2, "vid2", "https://yt/s/player/testkey/base.js")
+                self.assertEqual(c1, fake_code)
+                self.assertEqual(c2, fake_code)
+                self.assertEqual(calls["n"], 1, "第二次应命中磁盘缓存不再下载 player JS")
+        finally:
+            YoutubeIE._load_player = orig_method
 
     def test_unknown_download_error_keeps_original_text(self):
         err = _FakeDownloadError("boom 42")

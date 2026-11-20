@@ -12,6 +12,7 @@ DEFAULT_CONFIG = {
     "bili_cookie": "",             # Bilibili Cookie（登录后自动导出，或手填）
     "xhs_cookie": "",              # 小红书 Cookie（登录后自动导出，或手填）
     "jm_cookie": "",               # 禁漫天堂 Cookie（AVS，登录后导出或手填）
+    "yt_cookie": "",               # YouTube Cookie（人机/年龄限制校验用）
     "naming_rule": "unique_id",    # unique_id / timestamp / author_title / title / id_title
     "max_concurrent": 3,
     "theme": "dark",                 # dark / light / auto
@@ -169,6 +170,12 @@ class Config:
         """Edge 持久化配置文件目录（保存禁漫登录态）"""
         return os.path.join(os.path.dirname(os.path.abspath(self.path)),
                             "edge_profile_jm")
+
+    @property
+    def yt_profile_dir(self) -> str:
+        """Edge 持久化配置文件目录（保存 YouTube 登录态）"""
+        return os.path.join(os.path.dirname(os.path.abspath(self.path)),
+                            "edge_profile_yt")
 
     def set(self, key, value):
         # 写入 + 落盘放在同一把锁里：多个开关快速切换时不会丢写

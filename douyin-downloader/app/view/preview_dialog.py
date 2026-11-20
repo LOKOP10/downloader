@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """解析后、下载前的独立预览窗口。视频经本机临时代理保留 CDN 所需请求头。"""
 
+import re
+
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -79,6 +81,68 @@ class ClickableSlider(QSlider):
         event.accept()
 
 
+def _parse_preview_meta(label: str):
+    """从画质标签提取 (短边分辨率p, fps, 是否AV1)。"""
+    text = label or ""
+    height = 0
+    m = re.search(r"(\d{2,5})×(\d{2,5})", text)
+    if m:
+        height = min(int(m.group(1)), int(m.group(2)))
+    else:
+        mp = re.search(r"(\d{3,4})p\b", text, re.I)
+        if mp:
+            height = int(mp.group(1))
+    mf = re.search(r"(\d{2,3})fps", text, re.I)
+    fps = int(mf.group(1)) if mf else 0
+    is_av1 = "av1" in text.lower()
+    return height, fps, is_av1
+
+
+def select_preview_option(info, selected_index: int = 0):
+    """为下载前预览挑选流畅画质（>1080p 或 AV1 时优先切到 720p/1080p H.264）。
+
+    返回 (preview_label, preview_url, downgraded_from_label)。
+    未降级时第三项为空串；实际下载仍按界面所选清晰度执行。
+    """
+    options = getattr(info, "quality_options", None) or []
+    if options and 0 <= selected_index < len(options):
+        orig_label = info.quality_label(selected_index) if hasattr(info, "quality_label") else options[selected_index][0]
+        orig_url = options[selected_index][1]
+    else:
+        orig_label = getattr(info, "quality", "") or "视频"
+        orig_url = getattr(info, "play_url", "")
+
+    if not options or not orig_url:
+        return orig_label, orig_url, ""
+
+    orig_h, _, orig_av1 = _parse_preview_meta(orig_label)
+    if orig_h <= 1080 and not orig_av1:
+        return orig_label, orig_url, ""
+
+    def _score(idx: int):
+        raw_lab, _ = options[idx]
+        h, fps, av1 = _parse_preview_meta(raw_lab)
+        if h <= 0 or h > 1080:
+            return None
+        # 优先 H.264 720p（带宽小且流畅），其次 1080p，再次 480p，最后其他 ≤1080p
+        tier = 3 if 700 <= h <= 800 else (2 if h > 800 else (1 if h >= 480 else 0))
+        return (0 if av1 else 1, tier, fps, h)
+
+    best_idx = None
+    best_key = None
+    for idx in range(len(options)):
+        key = _score(idx)
+        if key is not None and (best_key is None or key > best_key):
+            best_key = key
+            best_idx = idx
+
+    if best_idx is None or options[best_idx][1] == orig_url:
+        return orig_label, orig_url, ""
+
+    cand_label = info.quality_label(best_idx) if hasattr(info, "quality_label") else options[best_idx][0]
+    return cand_label, options[best_idx][1], orig_label
+
+
 class PreviewDialog(QDialog):
     """视频流预览及图集翻页；accept 表示用户在预览中确认下载。"""
 
@@ -92,6 +156,9 @@ class PreviewDialog(QDialog):
         self._proxy = None
         self._player = None
         self._audio_player = None
+        self._user_paused = False
+        self._video_buffering = False
+        self._default_status_text = "流式预览当前画质；关闭窗口即停止播放"
         self._network = QNetworkAccessManager(self)
         self._original_pix = QPixmap()
         # 禁漫预览状态：会话由后台线程建好后回填
@@ -192,6 +259,7 @@ class PreviewDialog(QDialog):
                 self._audio_player.setAudioOutput(self._audio_output)
                 self._audio_player.setSource(QUrl(self._proxy.url("audio")))
                 self._player.positionChanged.connect(self._sync_audio)
+                self._player.mediaStatusChanged.connect(self._on_video_status)
                 self._audio_player.errorOccurred.connect(
                     lambda *_: self.status.setText("音轨预览失败：" +
                                                    self._audio_player.errorString()))
@@ -206,26 +274,49 @@ class PreviewDialog(QDialog):
             self.seek.sliderMoved.connect(self._seek)
             self.controls.addWidget(play)
             self.controls.addWidget(self.seek, 1)
-            self.status.setText("流式预览当前画质；关闭窗口即停止播放")
+            self.status.setText(self._default_status_text)
             self._player.play()
             if self._audio_player:
                 self._audio_player.play()
         else:
             self.stage.setText("没有可预览的媒体")
 
+    def _on_video_status(self, status):
+        """视频卡住缓冲时暂停音轨等待，避免声音先跑再被强行扯回。"""
+        if not self._audio_player:
+            return
+        if status in (QMediaPlayer.MediaStatus.BufferingMedia,
+                      QMediaPlayer.MediaStatus.StalledMedia):
+            self._video_buffering = True
+            self._audio_player.pause()
+            self.status.setText("视频缓冲中，音轨已同步等待…")
+        elif status in (QMediaPlayer.MediaStatus.BufferedMedia,
+                        QMediaPlayer.MediaStatus.LoadedMedia):
+            if self._video_buffering:
+                self._video_buffering = False
+                self.status.setText(self._default_status_text)
+                if not self._user_paused and self._player.isPlaying():
+                    self._audio_player.setPosition(self._player.position())
+                    self._audio_player.play()
+
     def _sync_audio(self, position):
-        if self._audio_player and abs(self._audio_player.position() - position) > 1200:
+        if (self._audio_player and not self._video_buffering
+                and not self._user_paused
+                and abs(self._audio_player.position() - position) > 450):
             self._audio_player.setPosition(position)
 
     def _toggle_play(self, button):
         if self._player.isPlaying():
+            self._user_paused = True
             self._player.pause()
             if self._audio_player:
                 self._audio_player.pause()
             button.setText("播放")
         else:
+            self._user_paused = False
             self._player.play()
-            if self._audio_player:
+            if self._audio_player and not self._video_buffering:
+                self._audio_player.setPosition(self._player.position())
                 self._audio_player.play()
             button.setText("暂停")
 

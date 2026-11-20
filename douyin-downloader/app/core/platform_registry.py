@@ -35,7 +35,7 @@ PLATFORM_ROUTES = {
     "jmcomic": PlatformRoute("_parse_jmcomic", ("jm_cookie",)),
     "pornhub": PlatformRoute("parse_pornhub"),
     "hanime1": PlatformRoute("parse_hanime1"),
-    "youtube": PlatformRoute("parse_youtube"),
+    "youtube": PlatformRoute("parse_youtube", ("yt_cookie", "yt_profile_dir")),
 }
 
 
