@@ -252,6 +252,52 @@ class MediaProxyTest(unittest.TestCase):
             finally:
                 dialog.reject()
 
+    def test_video_falls_back_on_request_exception_and_promotes_healthy_url(self):
+        import requests as _req
+        from app.core.media_proxy import _proxy_session
+
+        dead_url = "http://dead-pcdn.invalid/video.mp4"
+        good_url = self.base + "/media"
+        self.proxy.tracks["video"] = [dead_url, good_url]
+        real_sess = _proxy_session()
+        orig_request = real_sess.request
+        calls = []
+
+        def fake_request(method, url, *args, **kwargs):
+            calls.append(url)
+            if url == dead_url:
+                raise _req.ReadTimeout("simulated PCDN timeout")
+            return orig_request(method, url, *args, **kwargs)
+
+        with patch("app.core.media_proxy._proxy_session") as mock_sess_fn:
+            mock_sess = type("S", (), {"request": staticmethod(fake_request)})()
+            mock_sess_fn.return_value = mock_sess
+            with self.request(self.proxy.url("video"), headers={"Range": "bytes=0-3"}) as r1:
+                self.assertEqual(r1.status, 206)
+                self.assertEqual(r1.read(), PAYLOAD[:4])
+            # 第 1 次尝试了 dead_url 后切换至 good_url 并将其置顶
+            self.assertEqual(calls, [dead_url, good_url])
+            calls.clear()
+            with self.request(self.proxy.url("video"), headers={"Range": "bytes=4-7"}) as r2:
+                self.assertEqual(r2.status, 206)
+                self.assertEqual(r2.read(), PAYLOAD[4:8])
+            # 第 2 次直接命中 healthy good_url，不再在 dead_url 上浪费时间
+            self.assertEqual(calls, [good_url])
+
+    def test_all_upstreams_raising_returns_502(self):
+        import requests as _req
+
+        self.proxy.tracks["video"] = ["http://dead1.invalid/v", "http://dead2.invalid/v"]
+
+        def always_fail(*args, **kwargs):
+            raise _req.ConnectionError("boom")
+
+        with patch("app.core.media_proxy._proxy_session") as mock_sess_fn:
+            mock_sess_fn.return_value = type("S", (), {"request": staticmethod(always_fail)})()
+            with self.assertRaises(HTTPError) as caught:
+                self.request(self.proxy.url("video"))
+            self.assertEqual(caught.exception.code, 502)
+
 
 if __name__ == "__main__":
     unittest.main()

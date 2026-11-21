@@ -241,6 +241,29 @@ class InstagramAndXAndYoutubeFastPathTest(unittest.TestCase):
             ["android_vr", "ios", "web"],
         )
 
+    def test_bilibili_stream_urls_prefers_upos_over_pcdn_and_keeps_all(self):
+        stream = {
+            "baseUrl": "https://cn-jsnj-fx-02-01.bilivideo.com/v.m4s?os=bcache",
+            "backupUrl": [
+                "https://1-2-3-4.mcdn.bilivideo.cn/v.m4s?os=mcdn",
+                "https://upos-sz-mirrorcoso1.bilivideo.com/v.m4s?os=coso1bv",
+                "https://upos-sz-mirrorcos.bilivideo.com/v.m4s?os=cosbv",
+            ],
+        }
+        urls = sites._bili_stream_urls(stream)
+        self.assertEqual(len(urls), 4)
+        self.assertTrue(urls[0].startswith("https://upos-sz-mirrorcoso1.bilivideo.com/"))
+        self.assertTrue(urls[1].startswith("https://upos-sz-mirrorcos.bilivideo.com/"))
+        self.assertIn(stream["baseUrl"], urls[2:])
+
+    def test_downloader_probe_raises_timeout_instead_of_double_waiting(self):
+        import requests as _req
+        from app.core.downloader import DownloadManager
+
+        with patch("app.core.downloader.requests.get", side_effect=_req.ReadTimeout("slow pcdn")):
+            with self.assertRaises(_req.ReadTimeout):
+                DownloadManager._probe_total("https://cn-jsnj-fx-02-01.bilivideo.com/v.m4s", {})
+
 
 if __name__ == "__main__":
     unittest.main()

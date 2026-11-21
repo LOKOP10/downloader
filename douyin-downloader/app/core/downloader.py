@@ -5,6 +5,7 @@ import re
 import subprocess
 import threading
 import time
+import urllib.parse
 import uuid
 from collections import deque
 
@@ -36,9 +37,10 @@ SEGMENT_MIN_SIZE = 2 * 1024 * 1024   # 小于 2MB 不分片：连接开销大于
 SEGMENT_MAX = 32                 # 每文件并发连接数上限（与 IDM 一致：1-32）
 SEGMENT_DEFAULT_CONNECTIONS = 8  # 默认每文件连接数（IDM 默认也是 8）
 CONN_BUDGET = 64                 # 全局连接预算：并发任务多时按此摊薄
-CONNECT_TIMEOUT = 10             # 建连超时：坏掉的 CDN 要尽快判死好换下一个候选
-READ_TIMEOUT = 30                # 读超时：这么久一个字节都没来就判这条连接废了
+CONNECT_TIMEOUT = 6              # 建连超时：坏掉的 CDN 要尽快判死好换下一个候选
+READ_TIMEOUT = 20                # 读超时：这么久一个字节都没来就判这条连接废了
 HTTP_TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
+PROBE_TIMEOUT = (min(CONNECT_TIMEOUT, 5), 8)   # 元数据探测超时：节点连不上或死等时不拖延切换备用源
 FFMPEG_TIMEOUT = 900             # ffmpeg 合并上限（秒），超时判失败，别永远挂在「合并中」
 SEGMENT_CHUNK_MIN = 1024 * 1024        # 动态分块的块大小下限
 SEGMENT_CHUNK_MAX = 4 * 1024 * 1024    # 上限：太大慢连接会拖尾，太小请求太碎
@@ -557,50 +559,61 @@ class DownloadManager(QObject):
             return
         # 依次尝试「主地址 → 同档备用 CDN → 下一档画质」，全部失败才标记失败
         last_err = ""
-        for idx, (url, audio_url, audio_alts) in enumerate(plan):
-            if cancel.is_set():
-                break
-            if idx > 0:  # 换地址时清掉上一个地址的残片，避免错误续传
-                self._cleanup_temp_files(info.save_path)
-            success = False
-            # 同一地址最多 3 次（截断时用 .part 续传重试）
-            for _ in range(3):
+        bad_hosts = set()
+        if not hasattr(self, "_bad_hosts_by_task"):
+            self._bad_hosts_by_task = {}
+        self._bad_hosts_by_task[task_id] = bad_hosts
+        try:
+            for idx, (url, audio_url, audio_alts) in enumerate(plan):
                 if cancel.is_set():
                     break
-                try:
-                    self._download_once(info, url, cancel, cookies,
-                                        audio_url, audio_alts)
-                    last_err = ""
-                    self._update_task(info, error="")
-                    success = True
+                if idx > 0:  # 换地址时清掉上一个地址的残片，避免错误续传
+                    self._cleanup_temp_files(info.save_path)
+                success = False
+                # 同一地址最多 3 次（截断时用 .part 续传重试）
+                for _ in range(3):
+                    if cancel.is_set():
+                        break
+                    try:
+                        self._download_once(info, url, cancel, cookies,
+                                            audio_url, audio_alts)
+                        last_err = ""
+                        self._update_task(info, error="")
+                        success = True
+                        break
+                    except _Cancelled:
+                        last_err = ""
+                        break
+                    except IncompleteDownload as e:
+                        last_err = str(e)[:200]
+                        self._update_task(info, error=last_err)
+                        log.warning("下载不完整，重试 %s（地址 %d/%d）：%s",
+                                    task_id, idx + 1, len(plan), e)
+                        continue
+                    except (MissingDependency, ValueError, SignedUrlExpired) as e:
+                        # 参数/依赖类错误（如缺 ffmpeg、地址无效、链接过期）换其他地址
+                        # 也一样，直接判定失败，不要浪费 3 次重试 + 剩余候选地址。
+                        # 链接过期尤其要在这里拦住：实测 15 个候选地址会全部 403，
+                        # 既浪费时间又让日志里刷满无意义的 403。
+                        last_err = str(e)[:200]
+                        self._update_task(info, error=last_err)
+                        log.error("下载失败（不可重试）%s：%s", task_id, e,
+                                  exc_info=True)
+                        break
+                    except Exception as e:  # noqa: BLE001 - 换备用地址再试
+                        if isinstance(e, requests.RequestException):
+                            host = (urllib.parse.urlparse(url).hostname or "").lower()
+                            if host:
+                                bad_hosts.add(host)
+                        last_err = str(e)[:200]
+                        self._update_task(info, error=last_err)
+                        log.error("下载出错 %s（地址 %d/%d）：%s",
+                                  task_id, idx + 1, len(plan), e, exc_info=True)
+                        break
+                if success or cancel.is_set():
                     break
-                except _Cancelled:
-                    last_err = ""
-                    break
-                except IncompleteDownload as e:
-                    last_err = str(e)[:200]
-                    self._update_task(info, error=last_err)
-                    log.warning("下载不完整，重试 %s（地址 %d/%d）：%s",
-                                task_id, idx + 1, len(plan), e)
-                    continue
-                except (MissingDependency, ValueError, SignedUrlExpired) as e:
-                    # 参数/依赖类错误（如缺 ffmpeg、地址无效、链接过期）换其他地址
-                    # 也一样，直接判定失败，不要浪费 3 次重试 + 剩余候选地址。
-                    # 链接过期尤其要在这里拦住：实测 15 个候选地址会全部 403，
-                    # 既浪费时间又让日志里刷满无意义的 403。
-                    last_err = str(e)[:200]
-                    self._update_task(info, error=last_err)
-                    log.error("下载失败（不可重试）%s：%s", task_id, e,
-                              exc_info=True)
-                    break
-                except Exception as e:  # noqa: BLE001 - 换备用地址再试
-                    last_err = str(e)[:200]
-                    self._update_task(info, error=last_err)
-                    log.error("下载出错 %s（地址 %d/%d）：%s",
-                              task_id, idx + 1, len(plan), e, exc_info=True)
-                    break
-            if success or cancel.is_set():
-                break
+        finally:
+            self._bad_hosts_by_task.pop(task_id, None)
         if cancel.is_set():
             self._update_task(info, status="已取消")
         elif last_err:
@@ -792,7 +805,7 @@ class DownloadManager(QObject):
         h["Range"] = "bytes=0-0"
         try:
             with requests.get(url, headers=h, stream=True,
-                              timeout=HTTP_TIMEOUT) as resp:
+                              timeout=PROBE_TIMEOUT) as resp:
                 if resp.status_code == 206:
                     total = content_range_total(
                         resp.headers.get("Content-Range", ""))
@@ -800,6 +813,10 @@ class DownloadManager(QObject):
                         return total, True
                 elif resp.status_code == 200:
                     return int(resp.headers.get("Content-Length", 0) or 0), False
+        except (requests.Timeout, requests.exceptions.SSLError):
+            # 节点连接/首包超时或 TLS 握手被重置：直接交由上层切换备用 CDN，
+            # 避免返回 (0, False) 后再用同一坏地址进单连接白白重等一轮。
+            raise
         except requests.RequestException:
             pass
         return 0, False
@@ -1235,9 +1252,14 @@ class DownloadManager(QObject):
             # 视频轨是 DASH 下的大头，同样走 IDM 式多连接（旧实现只有单连接）
             v_got = self._fetch_track(url, v_tmp, _headers(url), cancel, info)
             v_total = info.total or v_got
-            # 音频轨同样可能挂在坏 CDN 上：自带备用地址，逐个换着下
+            # 音频轨同样可能挂在坏 CDN 上：自带备用地址，优先避开本次已超时的坏主机
             audio_urls = [audio_url] + [u for u in (audio_fallbacks or [])
                                         if u and u != audio_url]
+            bad_hosts = getattr(self, "_bad_hosts_by_task", {}).get(info.task_id) or set()
+            if bad_hosts and len(audio_urls) > 1:
+                audio_urls.sort(
+                    key=lambda u: 1 if (urllib.parse.urlparse(u).hostname or "").lower() in bad_hosts else 0
+                )
             a_got, audio_err = 0, None
             for i, a_url in enumerate(audio_urls):
                 try:

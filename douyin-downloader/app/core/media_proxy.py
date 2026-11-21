@@ -8,10 +8,10 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from .domain import needs_cookie_for_url
 from .http_headers import headers_for
-from .http_pool import shared_requests_session
 from .models import clean_cookie
 
 _STREAM_CHUNK = 256 * 1024
@@ -20,6 +20,19 @@ _PREFETCH_MIN_TOTAL = 512 * 1024    # 仅对 >=512KB 的大流启用预读缓存
 _PREFETCH_AHEAD = 2                 # 每次命中/响应后向前预拉最多 2 块（2MB）
 _MAX_CACHE_BLOCKS = 10              # 单代理实例最多缓存 10MB
 _RANGE_RE = re.compile(r"^bytes=(\d+)-(\d*)$")
+_THREAD_LOCAL = threading.local()
+
+
+def _proxy_session() -> requests.Session:
+    """每个处理线程独享一个带连接池的 Session，避免并发共享 CookieJar 竞争。"""
+    sess = getattr(_THREAD_LOCAL, "session", None)
+    if sess is None:
+        sess = requests.Session()
+        adapter = HTTPAdapter(pool_connections=8, pool_maxsize=16)
+        sess.mount("http://", adapter)
+        sess.mount("https://", adapter)
+        _THREAD_LOCAL.session = sess
+    return sess
 
 
 def _parse_total_size(headers) -> int:
@@ -57,7 +70,8 @@ class LocalMediaProxy(ThreadingHTTPServer):
         self._cache_lock = threading.Lock()
         self._blocks: OrderedDict = OrderedDict()
         self._inflight = set()
-        self._track_meta = {}       # track -> (active_url, total_size, content_type)
+        self._track_meta = {}       # track -> (total_size, content_type)
+        self._url_order = {track: list(urls) for track, urls in tracks.items()}
         self.thread = threading.Thread(target=self.serve_forever,
                                        kwargs={"poll_interval": 0.05}, daemon=True)
         self.thread.start()
@@ -66,10 +80,36 @@ class LocalMediaProxy(ThreadingHTTPServer):
         """返回供播放器使用的本地地址。"""
         return f"http://127.0.0.1:{self.server_port}/{self.token}/{track}"
 
+    def candidate_urls(self, track: str):
+        """返回当前按健康度排序的候选源列表；同步外部对 tracks 的修改。"""
+        raw = list(self.tracks.get(track) or [])
+        with self._cache_lock:
+            cached = self._url_order.get(track)
+            if cached is not None and len(cached) == len(raw) and set(cached) == set(raw):
+                return list(cached)
+            self._url_order[track] = list(raw)
+            return raw
+
+    def report_url(self, track: str, target_url: str, ok: bool):
+        """根据实测结果调整轨道候选源优先级，避免后续分块反复踩死节点。"""
+        if not target_url:
+            return
+        with self._cache_lock:
+            order = self._url_order.get(track)
+            if not order or target_url not in order:
+                return
+            if ok:
+                if order[0] != target_url:
+                    order.remove(target_url)
+                    order.insert(0, target_url)
+            elif len(order) > 1 and order[-1] != target_url:
+                order.remove(target_url)
+                order.append(target_url)
+
     def record_track_meta(self, track: str, url: str, total: int, content_type: str):
         if total >= _PREFETCH_MIN_TOTAL and url:
             with self._cache_lock:
-                self._track_meta[track] = (url, total, content_type or "video/mp4")
+                self._track_meta[track] = (total, content_type or "video/mp4")
 
     def get_cached_range(self, track: str, start: int, end: int):
         """若请求区间完整落入已对齐预读块中，返回 (bytes, total, content_type)。"""
@@ -77,7 +117,7 @@ class LocalMediaProxy(ThreadingHTTPServer):
             meta = self._track_meta.get(track)
             if not meta or start < 0 or end < start or (end - start + 1) > _PREFETCH_BLOCK * 2:
                 return None
-            _, total, ctype = meta
+            total, ctype = meta
             if start >= total:
                 return None
             end = min(end, total - 1)
@@ -104,7 +144,7 @@ class LocalMediaProxy(ThreadingHTTPServer):
             meta = self._track_meta.get(track)
             if not meta:
                 return
-            url, total, _ = meta
+            total, _ = meta
             start_blk = max(0, offset // _PREFETCH_BLOCK)
             targets = []
             for idx in range(start_blk, start_blk + _PREFETCH_AHEAD):
@@ -117,11 +157,11 @@ class LocalMediaProxy(ThreadingHTTPServer):
         for idx in targets:
             threading.Thread(
                 target=self._fetch_block,
-                args=(track, url, total, idx),
+                args=(track, total, idx),
                 daemon=True,
             ).start()
 
-    def _fetch_block(self, track: str, url: str, total: int, idx: int):
+    def _fetch_block(self, track: str, total: int, idx: int):
         key = (track, idx)
         try:
             if self._stopped.is_set():
@@ -130,20 +170,32 @@ class LocalMediaProxy(ThreadingHTTPServer):
             end = min(total - 1, start + _PREFETCH_BLOCK - 1)
             if end < start:
                 return
-            sess = shared_requests_session("media_proxy")
-            resp = sess.get(
-                url,
-                headers=media_headers(url, self.cookies, f"bytes={start}-{end}"),
-                timeout=(8, 20),
-            )
-            if resp.status_code in (200, 206) and resp.content:
-                data = resp.content
-                if len(data) <= _PREFETCH_BLOCK + 1024 and not self._stopped.is_set():
-                    with self._cache_lock:
-                        self._blocks[key] = data
-                        self._blocks.move_to_end(key)
-                        while len(self._blocks) > _MAX_CACHE_BLOCKS:
-                            self._blocks.popitem(last=False)
+            sess = _proxy_session()
+            urls = self.candidate_urls(track)
+            for pos, target_url in enumerate(urls):
+                if self._stopped.is_set():
+                    return
+                timeout = (3.5, 10) if (pos + 1 < len(urls)) else (6, 15)
+                try:
+                    resp = sess.get(
+                        target_url,
+                        headers=media_headers(target_url, self.cookies, f"bytes={start}-{end}"),
+                        timeout=timeout,
+                    )
+                    if resp.status_code in (200, 206) and resp.content:
+                        data = resp.content
+                        if len(data) <= _PREFETCH_BLOCK + 1024 and not self._stopped.is_set():
+                            self.report_url(track, target_url, True)
+                            with self._cache_lock:
+                                self._blocks[key] = data
+                                self._blocks.move_to_end(key)
+                                while len(self._blocks) > _MAX_CACHE_BLOCKS:
+                                    self._blocks.popitem(last=False)
+                        return
+                    self.report_url(track, target_url, False)
+                except requests.RequestException:
+                    self.report_url(track, target_url, False)
+                    continue
         except Exception:  # noqa: BLE001 - 预读失败不影响主流程
             pass
         finally:
@@ -158,6 +210,7 @@ class LocalMediaProxy(ThreadingHTTPServer):
         with self._cache_lock:
             self._blocks.clear()
             self._track_meta.clear()
+            self._url_order.clear()
 
 
 class _MediaHandler(BaseHTTPRequestHandler):
@@ -178,7 +231,7 @@ class _MediaHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         track = parts[2]
-        urls = self.server.tracks[track]
+        urls = self.server.candidate_urls(track)
         byte_range = self.headers.get("Range", "")
         m_range = _RANGE_RE.match(byte_range.strip()) if byte_range else None
 
@@ -205,16 +258,22 @@ class _MediaHandler(BaseHTTPRequestHandler):
                     self.server.schedule_prefetch(track, actual_end + 1)
                     return
 
-        sess = shared_requests_session("media_proxy")
-        for url in urls:
+        sess = _proxy_session()
+        total_cands = len(urls)
+        for idx, url in enumerate(urls):
+            req_timeout = (3.5, 8) if (idx + 1 < total_cands) else (8, 20)
+            sent_headers = False
             try:
                 with sess.request("HEAD" if head_only else "GET", url,
                                   headers=media_headers(url, self.server.cookies, byte_range),
-                                  stream=True, timeout=(8, 20)) as upstream:
+                                  stream=True, timeout=req_timeout) as upstream:
                     if upstream.status_code not in (200, 206):
+                        self.server.report_url(track, url, False)
                         continue
                     if byte_range and upstream.status_code != 206:
+                        self.server.report_url(track, url, False)
                         continue
+                    self.server.report_url(track, url, True)
                     total = _parse_total_size(upstream.headers)
                     ctype = upstream.headers.get("Content-Type") or "video/mp4"
                     if total >= _PREFETCH_MIN_TOTAL and (
@@ -223,6 +282,7 @@ class _MediaHandler(BaseHTTPRequestHandler):
                     ):
                         self.server.record_track_meta(track, url, total, ctype)
 
+                    sent_headers = True
                     self.send_response(upstream.status_code)
                     for name in ("Content-Type", "Content-Length", "Content-Range",
                                  "Accept-Ranges"):
@@ -240,7 +300,16 @@ class _MediaHandler(BaseHTTPRequestHandler):
                         if m_range and total >= _PREFETCH_MIN_TOTAL and sent > 0:
                             self.server.schedule_prefetch(track, int(m_range.group(1)) + sent)
                     return
-            except (requests.RequestException, BrokenPipeError, ConnectionResetError, OSError):
-                # 窗口关闭或拖动进度时，已断开的客户端不再接收数据。
-                return
-        self.send_error(502, "媒体源不可用")
+            except requests.RequestException:
+                # 尚未下发响应头前上游建连/首包失败（如 PCDN 超时、TLS 重置），切换备用源。
+                self.server.report_url(track, url, False)
+                if sent_headers:
+                    return
+                continue
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                # 窗口关闭或拖动进度时，已断开的客户端不再接收数据；若尚未发头则尝试备用源。
+                if sent_headers:
+                    return
+                self.server.report_url(track, url, False)
+                continue
+        self.send_error(502, "Upstream unavailable")

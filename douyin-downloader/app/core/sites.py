@@ -257,6 +257,21 @@ def _bili_play_url(bvid: str, cid: int, qn: int, cookie: str) -> str:
     return url
 
 
+def _bili_cdn_rank(url: str) -> int:
+    """B 站 CDN 节点优选排序值（越小越优先）：upos 镜像 > 普通 CDN > PCDN/MCDN。"""
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    query = (parsed.query or "").lower()
+    # 实测 PCDN / MCDN 节点（如 cn-jsnj-fx-*、*.mcdn.*、os=bcache/mcdn）经常 TLS 重置
+    # 或死等超时，而 upos-* 官方镜像一直稳定高速；仅将 PCDN 沉底作兜底，绝不丢弃。
+    if (".mcdn." in host or host.startswith("cn-") or host.startswith("mcdn-")
+            or "os=bcache" in query or "os=mcdn" in query):
+        return 2
+    if host.startswith("upos-"):
+        return 0
+    return 1
+
+
 def _bili_play_url_size(bvid: str, cid: int, qn: int,
                         cookie: str) -> Tuple[str, int, List[str]]:
     """按清晰度取 (durl 地址, 字节数, 备用地址)。durl 项自带精确 size"""
@@ -271,19 +286,19 @@ def _bili_play_url_size(bvid: str, cid: int, qn: int,
         sz = int(durl[0].get("size") or 0)
     except (TypeError, ValueError):
         sz = 0
-    url = durl[0].get("url", "") or ""
-    return url, sz, _bili_backup_urls(durl[0], url)
+    cands = _bili_stream_urls(durl[0])
+    return (cands[0] if cands else ""), sz, cands[1:]
 
 
 def _bili_stream_urls(stream: dict) -> List[str]:
-    """一路流（视频 / 音频）的全部候选地址：baseUrl 在前，backupUrl 依次跟上
+    """一路流（视频 / 音频 / durl）的全部候选地址，优先官方 upos 节点。
 
     实测 baseUrl 指向的 PCDN 节点（cn-jsnj-fx-*）经常直接 TLS 重置
     （SSL EOF）或连不上，而 backupUrl 里的 upos-* 镜像一直稳定（9~10 MB/s）。
-    只认 baseUrl 时主地址一挂整单就卡住，两个都得留着。
+    只认 baseUrl 时主地址一挂整单就卡住，两者都要保留并优先 upos 镜像。
     """
     out: List[str] = []
-    for key in ("baseUrl", "base_url"):
+    for key in ("baseUrl", "base_url", "url"):
         if stream.get(key):
             out.append(stream[key])
     out.extend(_bili_backup_urls(stream))
@@ -291,7 +306,7 @@ def _bili_stream_urls(stream: dict) -> List[str]:
     for u in out:
         if u and u not in uniq:
             uniq.append(u)
-    return uniq
+    return sorted(uniq, key=_bili_cdn_rank)
 
 
 def _bili_backup_urls(item: dict, skip: str = "") -> List[str]:
@@ -479,9 +494,10 @@ def parse_bilibili(url: str, cookie: str = "",
         qn = int(qn)
         try:
             if qn == current_qn and durl:
-                # 当前档位直接用响应里的 durl，含精确 size
-                u = durl[0].get("url", "") or ""
-                alts = _bili_backup_urls(durl[0], u)
+                # 当前档位直接用响应里的 durl，含精确 size，并优先 upos 节点
+                cands = _bili_stream_urls(durl[0])
+                u = cands[0] if cands else ""
+                alts = cands[1:]
                 try:
                     dsz = int(durl[0].get("size") or 0)
                 except (TypeError, ValueError):
