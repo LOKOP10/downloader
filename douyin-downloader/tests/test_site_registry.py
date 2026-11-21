@@ -55,7 +55,8 @@ class SiteRegistryContractTest(unittest.TestCase):
             x_profile_dir="profiles/x", dy_profile_dir="profiles/douyin",
             bili_cookie="bili=synthetic", base_dir="application-root",
             xhs_cookie="xhs=synthetic", xhs_profile_dir="profiles/xiaohongshu",
-            jm_cookie="jm=synthetic", jm_profile_dir="profiles/jmcomic")
+            jm_cookie="jm=synthetic", jm_profile_dir="profiles/jmcomic",
+            yt_cookie="yt=synthetic", yt_profile_dir="profiles/youtube")
         self.expected_args = {
             "douyin": (),
             "x": (self.ctx.x_cookie, self.ctx.x_profile_dir),
@@ -63,7 +64,8 @@ class SiteRegistryContractTest(unittest.TestCase):
             "bilibili": (self.ctx.bili_cookie, self.ctx.base_dir),
             "xiaohongshu": (self.ctx.xhs_cookie, self.ctx.xhs_profile_dir),
             "jmcomic": (self.ctx.jm_cookie,),
-            "pornhub": (), "hanime1": (), "youtube": (),
+            "pornhub": (), "hanime1": (),
+            "youtube": (self.ctx.yt_cookie, self.ctx.yt_profile_dir),
         }
         self.results = {platform: VideoInfo(source=platform, title="离线作品")
                         for platform in OFFICIAL_URLS}

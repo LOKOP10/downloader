@@ -113,3 +113,12 @@ XHS_FIELDS = [
 JM_FIELDS = [
     ("AVS", "禁漫登录后的 AVS（最重要，大部分本子免登录）", True),
 ]
+
+YT_FIELDS = [
+    ("SAPISID", "youtube.com 登录后的 SAPISID（必填）", True),
+    ("SID", "youtube.com 登录后的 SID（必填）", True),
+    ("HSID", "youtube.com 登录后的 HSID（可选，建议填写）", False),
+    ("SSID", "youtube.com 登录后的 SSID（可选，建议填写）", False),
+    ("__Secure-1PSID", "__Secure-1PSID（可选，建议填写）", False),
+    ("__Secure-3PSID", "__Secure-3PSID（可选，建议填写）", False),
+]

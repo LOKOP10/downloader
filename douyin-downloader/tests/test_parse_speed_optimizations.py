@@ -67,9 +67,23 @@ class HttpPoolAndCacheTest(unittest.TestCase):
             http_pool.invalidate_profile_cookie_cache(tmp, "douyin.com")
             self.assertEqual(http_pool.read_profile_cookie_cache(tmp, "douyin.com"), "")
 
+    def test_profile_cookie_cache_persists_beyond_20_hours(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".cookie_cache_douyin_com.json"
+            # 模拟 20 小时前写入的缓存（旧 12h TTL 下会被误判失效，现应保持可用）
+            import time as _time
+            path.write_text(
+                json.dumps({"ts": _time.time() - 20 * 3600, "cookie": "UIFID_TEMP=persist_ok"}),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                http_pool.read_profile_cookie_cache(tmp, "douyin.com"),
+                "UIFID_TEMP=persist_ok",
+            )
+
 
 class DouyinParserFastPathTest(unittest.TestCase):
-    def test_cached_uifid_uses_native_http_without_browser(self):
+    def test_cached_uifid_uses_native_http_without_browser_or_fallback(self):
         item = {
             "aweme_id": "999",
             "desc": "原生签名直连测试",
@@ -92,12 +106,71 @@ class DouyinParserFastPathTest(unittest.TestCase):
             http_pool.write_profile_cookie_cache(tmp, "douyin.com", "UIFID_TEMP=cached_uifid")
             parser = DouyinParser(profile_dir=tmp)
             with patch("app.core.dyapi.fetch_aweme_detail_http", return_value=item) as m_http, \
-                    patch.object(parser, "_from_share_page", return_value=share), \
+                    patch.object(parser, "_from_share_page", return_value=share) as m_share, \
+                    patch.object(parser, "_from_iteminfo_api") as m_iteminfo, \
+                    patch.object(parser, "_from_detail_api") as m_detail, \
                     patch.object(parser, "_from_browser_detail") as m_browser:
                 info = parser.parse_video("https://www.douyin.com/video/999")
             self.assertEqual(info.play_url, "https://cdn/1080.mp4")
             self.assertEqual(m_http.call_count, 1)
+            m_share.assert_not_called()
+            m_iteminfo.assert_not_called()
+            m_detail.assert_not_called()
             m_browser.assert_not_called()
+
+    def test_native_http_failure_falls_back_to_browser(self):
+        rich = DouyinParser()._build_info({
+            "aweme_id": "999",
+            "desc": "浏览器补全",
+            "video": {"play_addr": {"url_list": ["https://cdn/1080.mp4"]}},
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            http_pool.write_profile_cookie_cache(tmp, "douyin.com", "UIFID_TEMP=expired")
+            parser = DouyinParser(profile_dir=tmp)
+            with patch("app.core.dyapi.fetch_aweme_detail_http", return_value=None), \
+                    patch.object(parser, "_from_share_page", side_effect=RuntimeError("empty")), \
+                    patch.object(parser, "_from_iteminfo_api", side_effect=RuntimeError("empty")), \
+                    patch.object(parser, "_from_detail_api", side_effect=RuntimeError("empty")), \
+                    patch.object(parser, "_from_browser_detail", return_value=rich) as m_browser:
+                info = parser.parse_video("https://www.douyin.com/video/999")
+            self.assertEqual(info.play_url, "https://cdn/1080.mp4")
+            m_browser.assert_called_once_with("999")
+
+    def test_resolve_stops_at_location_without_downloading_body(self):
+        class _FakeCtxResp:
+            def __init__(self, headers, url=""):
+                self.headers = headers
+                self.url = url
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        calls = []
+
+        def fake_get(url, **kwargs):
+            calls.append((url, kwargs.get("allow_redirects"), kwargs.get("stream")))
+            return _FakeCtxResp(
+                {"Location": "https://www.iesdouyin.com/share/video/7709827262971473394/?from=web"},
+            )
+
+        parser = DouyinParser()
+        with patch.object(parser.session, "get", side_effect=fake_get):
+            resolved = parser.resolve("https://v.douyin.com/KNQzca1oHIk/")
+        self.assertIn("/share/video/7709827262971473394/", resolved)
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(calls[0][1])
+        self.assertTrue(calls[0][2])
+
+    def test_warmup_skips_browser_when_uifid_cached(self):
+        from app.core import browser_bridge
+        with tempfile.TemporaryDirectory() as tmp:
+            http_pool.write_profile_cookie_cache(tmp, "douyin.com", "UIFID_TEMP=ready")
+            with patch("playwright.sync_api.sync_playwright") as m_pw:
+                self.assertTrue(browser_bridge.warmup_douyin_cookies(tmp))
+            m_pw.assert_not_called()
 
     def test_fetch_aweme_detail_http_skips_network_without_uifid(self):
         self.assertIsNone(fetch_aweme_detail_http("999", cookie="", profile_dir=""))

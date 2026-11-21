@@ -154,6 +154,104 @@ class MediaProxyTest(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertEqual(headers_for(url), downloader.headers_for(url))
 
+    def test_prefetch_serves_large_sequential_range_from_cache(self):
+        import time as _time
+        large_len = 2 * 1024 * 1024 + 4096
+        large_data = (b"ABCD1234" * ((large_len // 8) + 1))[:large_len]
+        seen = []
+
+        class _LargeUpstream(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                br = self.headers.get("Range", "")
+                seen.append(br)
+                first, last = br.removeprefix("bytes=").split("-", 1)
+                s = int(first)
+                e = int(last) if last else large_len - 1
+                chunk = large_data[s:e + 1]
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {s}-{e}/{large_len}")
+                self.send_header("Content-Length", str(len(chunk)))
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+                self.wfile.write(chunk)
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _LargeUpstream)
+        th = threading.Thread(target=srv.serve_forever, daemon=True)
+        th.start()
+        p = LocalMediaProxy({"video": [f"http://127.0.0.1:{srv.server_port}/big.mp4"]}, "")
+        try:
+            with self.request(p.url("video"), headers={"Range": "bytes=0-65535"}) as r1:
+                self.assertEqual(r1.read(), large_data[:65536])
+            # 等待后台预读块落缓存
+            deadline = _time.time() + 3.0
+            while _time.time() < deadline:
+                if p.get_cached_range("video", 1048576, 1114111) is not None:
+                    break
+                _time.sleep(0.05)
+            before = len(seen)
+            with self.request(p.url("video"), headers={"Range": "bytes=1048576-1114111"}) as r2:
+                self.assertEqual(r2.read(), large_data[1048576:1114112])
+            self.assertEqual(len(seen), before, "第二块应直接命中内存预读缓存")
+        finally:
+            p.stop()
+            srv.shutdown()
+            srv.server_close()
+            th.join(timeout=2)
+
+    def test_select_preview_option_prefers_smooth_h264_for_4k_av1(self):
+        from app.view.preview_dialog import select_preview_option
+        info = VideoInfo(
+            quality="2160p · 60fps · AV1",
+            play_url="https://v/2160",
+            quality_options=[
+                ("2160p · 60fps · AV1", "https://v/2160"),
+                ("1440p · 60fps · AV1", "https://v/1440"),
+                ("1080p · 60fps", "https://v/1080"),
+                ("720p · 60fps", "https://v/720"),
+                ("360p · 30fps", "https://v/360"),
+            ],
+        )
+        lab, url, downgraded = select_preview_option(info, 0)
+        self.assertEqual(url, "https://v/720")
+        self.assertIn("720p", lab)
+        self.assertIn("2160p", downgraded)
+
+        # 选中 1080p 非 AV1 时保持原样不降级
+        lab2, url2, downgraded2 = select_preview_option(info, 2)
+        self.assertEqual(url2, "https://v/1080")
+        self.assertEqual(downgraded2, "")
+
+    def test_preview_dialog_pauses_audio_while_video_buffering(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        from PySide6.QtWidgets import QApplication
+        from app.view.preview_dialog import PreviewDialog
+
+        self.__class__.app = QApplication.instance() or QApplication([])
+        video = self.base + "/media"
+        info = VideoInfo(title="缓冲联动", play_url=video, audio_map={video: self.base + "/media"})
+        with patch("app.view.preview_dialog.QMediaPlayer.play") as m_play, \
+                patch("app.view.preview_dialog.QMediaPlayer.pause") as m_pause, \
+                patch("app.view.preview_dialog.QMediaPlayer.setPosition") as m_pos, \
+                patch("app.view.preview_dialog.QMediaPlayer.isPlaying", return_value=True), \
+                patch("app.view.preview_dialog.QMediaPlayer.position", return_value=4200), \
+                patch("app.view.preview_dialog.QMediaPlayer.setSource"):
+            dialog = PreviewDialog(info, url=video)
+            try:
+                m_play.reset_mock()
+                m_pause.reset_mock()
+                dialog._on_video_status(QMediaPlayer.MediaStatus.BufferingMedia)
+                self.assertTrue(dialog._video_buffering)
+                m_pause.assert_called()
+                dialog._on_video_status(QMediaPlayer.MediaStatus.BufferedMedia)
+                self.assertFalse(dialog._video_buffering)
+                m_pos.assert_called_with(4200)
+                m_play.assert_called()
+            finally:
+                dialog.reject()
+
 
 if __name__ == "__main__":
     unittest.main()

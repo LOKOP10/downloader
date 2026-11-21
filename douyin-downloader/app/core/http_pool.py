@@ -23,7 +23,7 @@ _REQ_LOCK = threading.Lock()
 _REQ_SESSIONS: Dict[str, requests.Session] = {}
 _CFFI_LOCAL = threading.local()
 
-_COOKIE_CACHE_TTL = 12 * 3600  # 12 小时内优先复用本地缓存，失败再由浏览器刷新
+_COOKIE_CACHE_TTL = 30 * 24 * 3600  # 30 天内持续复用本地缓存（UIFID 实测有效期百天以上），接口拒签时按需淘汰刷新
 
 
 def shared_requests_session(name: str = "default") -> requests.Session:

@@ -15,8 +15,11 @@
   下载时由 ffmpeg 合并。
 """
 import os
+import re
 import sys
 import tempfile
+import threading
+import time
 from typing import Dict, List, Optional
 
 from .models import VideoInfo
@@ -285,8 +288,8 @@ def build_video_info(data: dict) -> VideoInfo:
 
 
 _ERROR_HINTS = (
-    ("sign in to confirm your age", "该视频有年龄限制，需要登录 YouTube 账号后才能解析"),
-    ("confirm you're not a bot", "YouTube 要求人机验证，请稍后重试或更换网络"),
+    ("sign in to confirm your age", "该视频有年龄限制，请在「设置 → YouTube」登录后再试"),
+    ("confirm you're not a bot", "YouTube 要求登录或人机验证，请在「设置 → YouTube」网页登录或更换网络后重试"),
     ("members-only", "该视频仅频道会员可看，无法解析"),
     ("private video", "该视频是私享视频，无法解析"),
     ("this video is unavailable", "视频不可用（可能已删除、被地区限制，或链接有误）"),
@@ -303,15 +306,118 @@ _ERROR_HINTS = (
 
 def _friendly_error(exc: Exception) -> str:
     text = str(exc)
-    low = text.lower()
+    low = text.lower().replace("\u2019", "'")
     for key, hint in _ERROR_HINTS:
         if key in low:
             return hint
     return f"YouTube 解析失败：{text[:200]}"
 
 
-def _ydl_options(timeout: int) -> dict:
+def _prepare_cookie_file(cookie: str = "", profile_dir: str = "") -> Optional[str]:
+    """为 yt-dlp 准备独立的临时 Netscape Cookie 文件（避免多线程写回冲突）。"""
+    import shutil
+    from .browser_bridge import YT_COOKIES_FILENAME
+
+    if profile_dir:
+        src = os.path.join(profile_dir, YT_COOKIES_FILENAME)
+        if os.path.isfile(src):
+            fd, tmp = tempfile.mkstemp(prefix="vdl_yt_", suffix=".txt")
+            os.close(fd)
+            shutil.copy2(src, tmp)
+            return tmp
+
+    raw = (cookie or "").strip()
+    if not raw:
+        return None
+
+    lines = ["# Netscape HTTP Cookie File", ""]
+    count = 0
+    for pair in raw.split(";"):
+        if "=" not in pair:
+            continue
+        k, v = pair.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if not k or not v:
+            continue
+        lines.append("\t".join((".youtube.com", "TRUE", "/", "TRUE", "0", k, v)))
+        count += 1
+    if not count:
+        return None
+    fd, tmp = tempfile.mkstemp(prefix="vdl_yt_", suffix=".txt")
+    os.close(fd)
+    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return tmp
+
+
+_PLAYER_CACHE_LOCK = threading.Lock()
+_PLAYER_CACHE_TTL = 24 * 3600
+
+
+def _player_js_cache_dir() -> str:
+    return os.path.join(tempfile.gettempdir(), "douyin_dl_ytdlp_cache", "player_js")
+
+
+def _install_player_js_disk_cache() -> None:
+    """为 yt-dlp 的 YoutubeIE._load_player 挂接进程外 24h 磁盘缓存（免每次重下 2MB player JS）。"""
+    try:
+        from yt_dlp.extractor.youtube._video import YoutubeIE
+    except Exception:  # noqa: BLE001 - 单测注入假 yt_dlp 时静默跳过
+        return
+    with _PLAYER_CACHE_LOCK:
+        orig = getattr(YoutubeIE, "_load_player", None)
+        if not callable(orig) or getattr(orig, "_vdl_disk_cached", False):
+            return
+
+        def _cached_load_player(ie_self, video_id, player_url, fatal=True):
+            try:
+                key = ie_self._player_js_cache_key(player_url)
+            except Exception:  # noqa: BLE001
+                return orig(ie_self, video_id, player_url, fatal=fatal)
+
+            if key in ie_self._code_cache:
+                return ie_self._code_cache.get(key)
+
+            safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(key))
+            cdir = _player_js_cache_dir()
+            cpath = os.path.join(cdir, f"{safe}.js")
+            try:
+                if os.path.isfile(cpath):
+                    st = os.stat(cpath)
+                    if st.st_size > 10_000 and (time.time() - st.st_mtime) < _PLAYER_CACHE_TTL:
+                        with open(cpath, "r", encoding="utf-8") as fh:
+                            code = fh.read()
+                        if code:
+                            ie_self._code_cache[key] = code
+                            return code
+            except OSError:
+                pass
+
+            code = orig(ie_self, video_id, player_url, fatal=fatal)
+            if code and isinstance(code, str) and len(code) > 10_000:
+                try:
+                    os.makedirs(cdir, exist_ok=True)
+                    tmp = f"{cpath}.{os.getpid()}.{threading.get_ident()}.tmp"
+                    with open(tmp, "w", encoding="utf-8") as fh:
+                        fh.write(code)
+                    os.replace(tmp, cpath)
+                except OSError:
+                    pass
+            return code
+
+        _cached_load_player._vdl_disk_cached = True
+        YoutubeIE._load_player = _cached_load_player
+
+
+def _ydl_options(timeout: int, cookie_file: Optional[str] = None) -> dict:
     cache_dir = os.path.join(tempfile.gettempdir(), "douyin_dl_ytdlp_cache")
+    # 带登录 Cookie 时优先 tv_samsung（实测免 SABR 截断直接给 4K60 DASH 直链），web 兜底
+    yt_args: dict = {
+        "player_client": ["tv_samsung", "web"] if cookie_file else ["android_vr", "ios", "web"],
+    }
+    if cookie_file:
+        # tv_samsung API 自带完整元数据与播放流，跳过 5~6s 的网页 HTML 拉取
+        yt_args["player_skip"] = ["webpage"]
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -320,16 +426,15 @@ def _ydl_options(timeout: int) -> dict:
         "noplaylist": True,          # 带 list= 参数的单个视频只解析视频本身
         "cachedir": cache_dir,       # 复用 player JS / EJS 缓存，减少重复请求
         "extractor_args": {
-            "youtube": {
-                # 优先走免 JS 签名挑战的客户端，显著缩短提取耗时
-                "player_client": ["android_vr", "ios", "web"],
-            }
+            "youtube": yt_args,
         },
         "socket_timeout": max(5, int(timeout or 15)),
         "retries": 2,
         "extractor_retries": 2,
         "logger": _QuietLogger(),
     }
+    if cookie_file:
+        opts["cookiefile"] = cookie_file
     proxy = _proxy_url()
     if proxy:
         opts["proxy"] = proxy
@@ -351,7 +456,8 @@ def _reject_unsupported(url: str) -> None:
                          "请打开视频后复制它自己的链接")
 
 
-def parse_youtube(url: str, timeout: int = 30) -> VideoInfo:
+def parse_youtube(url: str, cookie: str = "", profile_dir: str = "",
+                  timeout: int = 30) -> VideoInfo:
     """解析一个 YouTube 视频链接（watch / youtu.be / shorts / live 均可）"""
     _reject_unsupported(url)
     try:
@@ -360,13 +466,21 @@ def parse_youtube(url: str, timeout: int = 30) -> VideoInfo:
     except ImportError as e:  # 打包缺组件时给出可读提示
         raise ParseError("缺少 YouTube 解析组件（yt-dlp），请安装完整版本后再试") from e
 
+    _install_player_js_disk_cache()
+    cookie_file = _prepare_cookie_file(cookie, profile_dir)
     try:
-        with YoutubeDL(_ydl_options(timeout)) as ydl:
+        with YoutubeDL(_ydl_options(timeout, cookie_file=cookie_file)) as ydl:
             data = ydl.extract_info(url, download=False)
     except DownloadError as e:
         raise ParseError(_friendly_error(e)) from e
     except Exception as e:  # noqa: BLE001 - yt-dlp 内部异常类型很杂
         raise ParseError(f"YouTube 解析失败：{e}") from e
+    finally:
+        if cookie_file and os.path.isfile(cookie_file):
+            try:
+                os.remove(cookie_file)
+            except OSError:
+                pass
 
     if not isinstance(data, dict):
         raise ParseError("YouTube 没有返回视频信息，请确认链接有效")

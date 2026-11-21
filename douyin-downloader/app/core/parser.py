@@ -71,11 +71,28 @@ class DouyinParser:
         return url
 
     def resolve(self, url: str) -> str:
-        """跟随短链重定向，返回最终 URL"""
+        """跟随短链重定向，只追 Location 头不下载正文，拿到作品/用户 ID 即停"""
+        cur = url
         try:
-            resp = self.session.get(url, headers=self._req_headers(),
-                                    timeout=self.timeout, allow_redirects=True)
-            return resp.url
+            for _ in range(6):
+                with self.session.get(
+                    cur,
+                    headers=self._req_headers(),
+                    timeout=self.timeout,
+                    allow_redirects=False,
+                    stream=True,
+                ) as resp:
+                    headers = getattr(resp, "headers", None) or {}
+                    loc = headers.get("Location") or headers.get("location")
+                    if not loc:
+                        return getattr(resp, "url", None) or cur
+                    cur = urllib.parse.urljoin(cur, loc)
+                    try:
+                        self.parse_ids(cur)
+                        return cur
+                    except ParseError:
+                        continue
+            return cur
         except requests.RequestException as e:
             raise ParseError(f"链接请求失败：{e}")
 
@@ -104,6 +121,35 @@ class DouyinParser:
             return "user", m.group(1)
         raise ParseError("无法从链接中识别作品 ID，请确认链接有效")
 
+    def _fetch_fallback_info(self, item_id: str, kind: str) -> Tuple[Optional[VideoInfo], List[str]]:
+        """轻量兜底数据源链：分享页 / iteminfo / detail 无签接口。"""
+        errors: List[str] = []
+        for name, fetcher in (
+                ("_from_share_page", lambda: self._from_share_page(item_id, kind)),
+                ("_from_iteminfo_api", lambda: self._from_iteminfo_api(item_id)),
+                ("_from_detail_api", lambda: self._from_detail_api(item_id))):
+            try:
+                info = fetcher()
+                if info:
+                    return info, errors
+            except Exception as e:  # noqa: BLE001 - 聚合所有尝试的失败原因
+                errors.append(f"{name}: {e}")
+        return None, errors
+
+    def _merge_rich_info(self, info: Optional[VideoInfo], rich: Optional[VideoInfo],
+                         errors: List[str]) -> VideoInfo:
+        """合并基础信息与详情接口全量结果。"""
+        if not info:
+            if rich:
+                return rich
+            raise ParseError("作品信息获取失败。" + "；".join(errors[-2:]))
+        if rich:
+            if info.is_image:
+                return self._merge_image_detail(info, rich)
+            if self._quality_key(rich) > self._quality_key(info):
+                return rich
+        return info
+
     # ------------------------------------------------------------------ #
     # 单作品解析
     # ------------------------------------------------------------------ #
@@ -119,20 +165,28 @@ class DouyinParser:
             raise ParseError("检测到用户主页链接，请前往「批量下载」页面使用")
 
         # 优先纯 HTTP 签名详情（curl_cffi + a_bogus + websign），命中缓存或手填
-        # uifid 时 0 浏览器即可拿全量 bit_rate 与动图；仅在未缓存或直连失败时回退 Edge。
+        # uifid 时 0 浏览器直接拿全量 bit_rate 与动图，不再提前陪跑已失效的兜底接口；
+        # 仅在直连失败或缺失 uifid 时才走兜底链并回退 Edge 刷新缓存。
         from .dyapi.client import _resolve_cookie
-        _, dy_kv, _ = _resolve_cookie(self.cookie, self.profile_dir)
         from .dyapi.websign import pick_uifid
-        has_uifid = bool(pick_uifid(dy_kv))
+        _, dy_kv, _ = _resolve_cookie(self.cookie, self.profile_dir)
+        if pick_uifid(dy_kv):
+            try:
+                native = self._from_native_detail(item_id)
+                if native:
+                    return native
+            except Exception:  # noqa: BLE001 - 失败平滑降级到兜底链/浏览器
+                pass
+            info, errors = self._fetch_fallback_info(item_id, kind)
+            rich = None
+            if self.profile_dir:
+                try:
+                    rich = self._from_browser_detail(item_id)
+                except Exception:  # noqa: BLE001
+                    rich = None
+            return self._merge_rich_info(info, rich, errors)
 
         rich_box = {}
-        native_box = {}
-
-        def _native_try():
-            try:
-                native_box["info"] = self._from_native_detail(item_id)
-            except Exception:  # noqa: BLE001
-                pass
 
         def _browser_try():
             try:
@@ -140,58 +194,17 @@ class DouyinParser:
             except Exception:  # noqa: BLE001 - 补全失败保留 HTTP 结果
                 pass
 
-        native_job = None
         browser_job = None
-        if has_uifid:
-            native_job = threading.Thread(target=_native_try, daemon=True)
-            native_job.start()
-        elif self.profile_dir:
+        if self.profile_dir:
             browser_job = threading.Thread(target=_browser_try, daemon=True)
             browser_job.start()
 
-        errors = []
-        info: Optional[VideoInfo] = None
-        # 分享页是轻量兜底数据源；iteminfo / detail 无签接口留作最后兜底
-        for name, fetcher in (
-                ("_from_share_page", lambda: self._from_share_page(item_id, kind)),
-                ("_from_iteminfo_api", lambda: self._from_iteminfo_api(item_id)),
-                ("_from_detail_api", lambda: self._from_detail_api(item_id))):
-            try:
-                info = fetcher()
-                if info:
-                    break
-            except Exception as e:  # noqa: BLE001 - 聚合所有尝试的失败原因
-                errors.append(f"{name}: {e}")
-
+        info, errors = self._fetch_fallback_info(item_id, kind)
         rich = None
-        if native_job is not None:
-            native_job.join(timeout=15)
-            rich = native_box.get("info")
-            if not rich and self.profile_dir:
-                # 缓存的 uifid 失效或接口被风控时回退真实浏览器，并顺带刷新缓存
-                try:
-                    rich = self._from_browser_detail(item_id)
-                except Exception:  # noqa: BLE001
-                    rich = None
-        elif browser_job is not None:
+        if browser_job is not None:
             browser_job.join(timeout=30)
             rich = rich_box.get("info")
-
-        if not info:
-            if rich:
-                return rich
-            raise ParseError("作品信息获取失败。" + "；".join(errors[-2:]))
-
-        # 分享页/列表接口的 bit_rate 常缺高清档，用详情接口补全；
-        # 图文作品的分享页还会退化成纯静图，动图视频轨只在详情接口里，需要合并
-        if rich:
-            if info.is_image:
-                info = self._merge_image_detail(info, rich)
-            # 分辨率相同时帧率更高也算"更全"（分享页常只有 1080p30，
-            # 详情接口才给 1080p60 那条）
-            elif self._quality_key(rich) > self._quality_key(info):
-                return rich
-        return info
+        return self._merge_rich_info(info, rich, errors)
 
     @staticmethod
     def _merge_image_detail(info: VideoInfo, rich: VideoInfo) -> VideoInfo:

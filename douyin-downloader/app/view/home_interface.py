@@ -37,7 +37,7 @@ from ..core.site_ctx import SiteContext
 from ..core.workers import CoverWorker, ParseWorker
 from . import design as D
 from . import workspace as W
-from .preview_dialog import PreviewDialog
+from .preview_dialog import PreviewDialog, select_preview_option
 
 log = get_logger("home")
 
@@ -531,11 +531,9 @@ class HomeInterface(ScrollArea):
             return
         options = info.quality_options
         idx = self._selected_quality_index() if options and not self.qualityCombo.isHidden() else 0
-        if options and 0 <= idx < len(options):
-            label, url = options[idx]
-            label = info.quality_label(idx)
-        else:
-            label, url = info.quality or "视频", info.play_url
+        label, url, orig_label = select_preview_option(info, idx)
+        if orig_label:
+            label = f"流畅预览：{label}（点下载仍保存 {orig_label}）"
         context = SiteContext.from_config(self.ctx.config)
         # 禁漫预览要靠 Cookie 换原图，但它不在 needs_cookie_for_source 里
         # （CDN 直链本身不需要 Cookie），所以这里显式带上
