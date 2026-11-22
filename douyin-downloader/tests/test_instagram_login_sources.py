@@ -22,7 +22,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _SITES = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "app", "core", "sites.py")
+    os.path.abspath(__file__))), "app", "core", "parsers", "instagram.py")
 
 
 def _src():

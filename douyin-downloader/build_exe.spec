@@ -75,6 +75,7 @@ if os.path.exists(_VERSION_SRC):
 from PyInstaller.utils.hooks import collect_submodules
 hiddenimports += collect_submodules('app.core.xhsapi')
 hiddenimports += collect_submodules('app.core.dyapi')
+hiddenimports += collect_submodules('app.core.parsers')
 _XHSAPI_ROOT = os.path.join(_SPECDIR, 'app', 'core', 'xhsapi')
 for _sub in ('xhs_core', 'xhs_pc'):
     _js_src = os.path.join(_XHSAPI_ROOT, _sub, 'js')

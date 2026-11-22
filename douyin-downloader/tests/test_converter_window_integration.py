@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 from PIL import Image
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from app.core.config import Config
 from app.core.ffmpeg import ffmpeg_path
 from app.main_window import MainWindow
@@ -55,5 +55,5 @@ class ConverterWindowIntegrationTest(unittest.TestCase):
     self.app.processEvents()
     self.assertLessEqual(window.tabBar.themeButton.geometry().right(),window.tabBar.width())
    finally:
-    window.close();self.app.processEvents();sys.excepthook=hook
+    window.close();window.deleteLater();del window;QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete);self.app.processEvents();sys.excepthook=hook
    self.assertFalse(errors,errors)

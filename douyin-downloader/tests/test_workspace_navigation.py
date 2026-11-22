@@ -35,6 +35,7 @@ class WorkspaceNavigationTest(unittest.TestCase):
     def tearDown(self):
         self.window.close()
         self.window.deleteLater()
+        self.window = None
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.app.processEvents()
         self.temp.cleanup()

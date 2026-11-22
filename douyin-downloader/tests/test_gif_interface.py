@@ -283,6 +283,9 @@ class GifWindowIntegrationTest(unittest.TestCase):
                                      window.tabBar.width())
             finally:
                 window.close()
+                window.deleteLater()
+                del window
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
                 self.app.processEvents()
 
     def test_real_engine_from_main_window(self):
@@ -328,6 +331,9 @@ class GifWindowIntegrationTest(unittest.TestCase):
                     self.assertGreaterEqual(getattr(image, "n_frames", 1), 4)
             finally:
                 window.close()
+                window.deleteLater()
+                del window
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
                 self.app.processEvents()
 
 

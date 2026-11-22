@@ -4,7 +4,7 @@ import tempfile,threading,time,unittest
 from pathlib import Path
 from unittest.mock import patch
 from PIL import Image
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QCoreApplication, QEvent, QTimer
 from PySide6.QtWidgets import QApplication
 from app.core.config import Config
 from app.main_window import MainWindow
@@ -38,4 +38,4 @@ class ConverterCloseIntegrationTest(unittest.TestCase):
      self.assertFalse(window.isVisible())
      page._job.thread.join(2);self.assertFalse(page._job.thread.is_alive())
    finally:
-    release.set();window.close();self.app.processEvents()
+    release.set();window.close();window.deleteLater();del window;QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete);self.app.processEvents()

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtCore import QObject, QPoint, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, Qt, Signal
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import TransparentToolButton
@@ -49,6 +49,11 @@ class UiFeedbackTest(unittest.TestCase):
 
     def tearDown(self):
         self.window.close()
+        self.window.deleteLater()
+        self.window = None
+        self.home = None
+        self.tasks = None
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.app.processEvents()
         D.set_reduce_motion(self.motion)
         self.temp.cleanup()

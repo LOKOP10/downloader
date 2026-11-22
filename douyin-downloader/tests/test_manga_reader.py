@@ -8,7 +8,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import Qt, QPoint, QTimer
+from PySide6.QtCore import QCoreApplication, QEvent, Qt, QPoint, QTimer
 from PySide6.QtGui import QColor, QImage, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -46,7 +46,10 @@ class MangaReaderTest(unittest.TestCase):
     def tearDown(self):
         for window in self.windows:
             window.close()
+            window.deleteLater()
+        self.windows.clear()
         self.wait(lambda: not LocalJobs._retired)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.app.processEvents()
         self.temp.cleanup()
         self.assertFalse(self.qt_errors, f"Unhandled Qt callback errors: {self.qt_errors}")

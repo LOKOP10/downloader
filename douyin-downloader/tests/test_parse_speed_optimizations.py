@@ -191,8 +191,8 @@ class InstagramAndXAndYoutubeFastPathTest(unittest.TestCase):
         }
         html = f'"init",[],[{json.dumps({"contextJSON": json.dumps(embed_ctx)})}]],'
         fake_resp = SimpleNamespace(status_code=200, text=html)
-        with patch("app.core.sites._ig_http_cffi_get", return_value=fake_resp), \
-                patch("app.core.sites._instagram_browser") as m_browser:
+        with patch("app.core.parsers.instagram._ig_http_cffi_get", return_value=fake_resp), \
+                patch("app.core.parsers.instagram._instagram_browser") as m_browser:
             info = sites.parse_instagram("https://www.instagram.com/reel/ABC123/")
         self.assertEqual(info.play_url, "https://cdn.ig/video.mp4")
         self.assertEqual(info.author, "tester")
@@ -209,7 +209,7 @@ class InstagramAndXAndYoutubeFastPathTest(unittest.TestCase):
         }
         html = f'"init",[],[{json.dumps({"contextJSON": json.dumps(embed_ctx)})}]],'
         fake_resp = SimpleNamespace(status_code=200, text=html)
-        with patch("app.core.sites._ig_http_cffi_get", return_value=fake_resp):
+        with patch("app.core.parsers.instagram._ig_http_cffi_get", return_value=fake_resp):
             info = sites._instagram_http_fast("REEL1", "", "", is_reel=True)
         self.assertIsNone(info)
 
@@ -224,7 +224,7 @@ class InstagramAndXAndYoutubeFastPathTest(unittest.TestCase):
             calls["n"] += 1
             return SimpleNamespace(ok=True, json=lambda: {"guest_token": "gt_cached"})
         sess.post = counting_post
-        with patch("app.core.sites.shared_requests_session", return_value=sess):
+        with patch("app.core.parsers.x.shared_requests_session", return_value=sess):
             t1 = sites._x_guest_token({"User-Agent": "ua"})
             t2 = sites._x_guest_token({"User-Agent": "ua"})
         self.assertEqual(t1, "gt_cached")

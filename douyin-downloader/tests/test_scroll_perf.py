@@ -6,7 +6,7 @@ import time
 import unittest
 from pathlib import Path
 
-from PySide6.QtCore import QEventLoop, QPoint, QPointF, QTimer, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QPoint, QPointF, QTimer, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import QApplication, QListWidget, QWidget
 from qfluentwidgets import ListWidget, PlainTextEdit, ScrollArea, TableWidget
@@ -301,6 +301,9 @@ class ScrollCoverageTest(unittest.TestCase):
             setTheme(original_theme)
             badge.close()
             badge.deleteLater()
+            del badge
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            self.app.processEvents()
 
     def test_reduce_motion_finishes_inflight_navigation_and_remains_on_new_page(self):
         prior = D.reduce_motion()
@@ -324,6 +327,9 @@ class ScrollCoverageTest(unittest.TestCase):
                 self.assertEqual(window.homeInterface.pos(), QPoint(0, 0))
             finally:
                 window.close()
+                window.deleteLater()
+                del window
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
                 self.app.processEvents()
                 D.set_reduce_motion(prior)
 

@@ -66,6 +66,8 @@ class MangaWindowIntegrationTest(unittest.TestCase):
                 self.assertEqual(shelf.library.books[0].page_count, 3)
             finally:
                 window.close()
+                window.deleteLater()
+                del window
                 for _ in range(20):
                     self.app.processEvents()
                     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

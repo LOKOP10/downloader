@@ -4,6 +4,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import tempfile
 import unittest
 from unittest.mock import patch
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 from app.core.config import Config
 from app.main_window import MainWindow
@@ -25,6 +26,11 @@ class HomeParseRetryTest(unittest.TestCase):
 
     def tearDown(self):
         self.window.close()
+        self.window.deleteLater()
+        self.window = None
+        self.home = None
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.app.processEvents()
         self.temp.cleanup()
 
     def test_empty_page_retries_once_then_reports_failure(self):

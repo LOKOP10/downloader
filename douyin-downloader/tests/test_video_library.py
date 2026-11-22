@@ -7,6 +7,7 @@ import time
 import unittest
 from pathlib import Path
 
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 
 from app.core.config import Config
@@ -147,7 +148,17 @@ class VideoLibraryTest(unittest.TestCase):
         window = MainWindow(config)
         window.show()
         self.app.processEvents()
-        self.addCleanup(window.close)
+
+        def _cleanup_window():
+            nonlocal window
+            if window is not None:
+                window.close()
+                window.deleteLater()
+                window = None
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                self.app.processEvents()
+
+        self.addCleanup(_cleanup_window)
         self.assertEqual(window.tabBar.count(), 6)
         self.assertIs(window._pages[4], window.videoInterface)
         page = window.videoInterface

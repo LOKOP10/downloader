@@ -144,6 +144,10 @@ class PageView(QGraphicsView):
         self._click_timer = QTimer(self)
         self._click_timer.setSingleShot(True)
         self._click_timer.timeout.connect(lambda: self.turn.emit(self._click_delta))
+        # 定时器随 PageView 一并析构，避免销毁后游离 QTimer.singleShot 回调已删除的 C++ 对象。
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.timeout.connect(self.apply_fit)
 
     def display(self, image):
         pixmap = QPixmap.fromImage(image)
@@ -181,7 +185,7 @@ class PageView(QGraphicsView):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         # A scrollbar can change viewport dimensions during fit; queue the update.
-        QTimer.singleShot(0, self.apply_fit)
+        self._fit_timer.start(0)
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:

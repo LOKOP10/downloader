@@ -28,6 +28,7 @@ from .core.applog import get_logger
 from .core.config import Config
 from .core.downloader import DownloadManager
 from .view import design as D
+from .view import shell_chrome as SC
 from .view import workspace as W
 from .view.batch_interface import BatchInterface
 from .view.converter_interface import ConverterInterface
@@ -154,12 +155,12 @@ class MainWindow(FluentWindow):
 
         # 顶部导航栏（TabBar 这个名字保留：外部与测试用它判断导航项数量 /
         # 主题按钮位置，语义仍是「导航栏」）
-        self.tabBar = W.TopBar(_NAV_ITEMS, app_name="视频下载器",
+        self.tabBar = SC.TopBar(_NAV_ITEMS, app_name="视频下载器",
                                version=f"v{__version__}", parent=self)
         self.tabBar.setObjectName("appTabBar")
         self.tabBar.themeButton.clicked.connect(self._toggle_theme)
 
-        self.statusBar = W.StatusBar(self)
+        self.statusBar = SC.StatusBar(self)
 
         # widgetLayout 原本只放 stackedWidget。改成：
         #   [顶部 TopBar]
@@ -342,7 +343,7 @@ class MainWindow(FluentWindow):
             return                    # 简约模式：画布不叠光晕（第三轮重做默认关闭，配置项可恢复）
         rect = QRectF(self.rect())
         rail = 0  # 顶部 tab 布局：左侧不再有侧栏，内容区从 x=0 开始
-        top = D.TITLEBAR_H + W.TopBar.HEIGHT
+        top = D.TITLEBAR_H + SC.TopBar.HEIGHT
         bottom = rect.height() - (self.statusBar.height()
                                   if getattr(self, "statusBar", None) else 0)
         area = QRectF(rail, top, rect.width() - rail, max(0.0, bottom - top))
